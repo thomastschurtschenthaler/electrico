@@ -62,7 +62,7 @@ impl Frontend {
                       match command {
                         FrontendCommand::PostIPC {request_id, nonce, params } => {
                             trace!("frontend ipc call {} {}", nonce, params);
-                            if nonce!=ipc_handler_id.clone() {
+                            if nonce!=ipc_handler_id {
                                 error!("frontend ipc call nonce does not match - forbidden client-nonce:{} backend-nonce:{}", nonce, ipc_handler_id.clone());
                                 respond_status(StatusCode::FORBIDDEN, CONTENT_TYPE_TEXT.to_string(), "forbidden".to_string().into_bytes(), responder);
                                 return;
@@ -317,7 +317,7 @@ impl Frontend {
         for (_id, win) in self.windows.iter() {
             if win.window.is_focused() {
                 #[cfg(debug_assertions)] {
-                    if (win.webview.is_devtools_open()) {
+                    if win.webview.is_devtools_open() {
                         win.webview.close_devtools();
                     } else {
                         win.webview.open_devtools();
