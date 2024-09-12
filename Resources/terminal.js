@@ -22,6 +22,6 @@ document.getElementById("send").onclick = (e) => {
 };
 window.onWriteOutput((event, text, level) => {
     text = text.replaceAll("\n", "<br>").replaceAll("\r", "<br>");
-    let html = level!=null?("<div class='"+level+"'>"+text+"</div>"):text;
+    let html = level!=null?("<span class='"+level+"'>"+text+"</span>"):text;
     document.getElementById("output").innerHTML+=html;
 });

@@ -84,18 +84,36 @@ var __electrico_nonce=null;
                 }
             }
         });
-        let resp = window.__electrico.channel[channel](event, ...args);
-        Promise.resolve(resp).then(function(ret) {
-            let response = event.returnValue!=null?event.returnValue:ret;
-            if (response==undefined) response=null;
-            event.returnValue = response;
-            timeout.cleared = true;
-            const req = createCMDRequest(true);
-            req.send(JSON.stringify({"action":"SetIPCResponse", "request_id":requestID, "params": JSON.stringify(response)}));
-        }).catch((e) => {
-            console.error("callChannel error", e);
-            window.__electrico.error = e;
-        });
+        let resp = Promise.resolve(window.__electrico.channel[channel](event, ...args));
+        setTimeout(()=>{
+            resp.then(function(ret) {
+                let response = event.returnValue!=null?event.returnValue:ret;
+                if (response==undefined) response=null;
+                event.returnValue = response;
+                timeout.cleared = true;
+                const req = createCMDRequest(true);
+                function getCircularReplacer() {
+                    const ancestors = [];
+                    return function (key, value) {
+                      if (typeof value !== "object" || value === null) {
+                        return value;
+                      }
+                      while (ancestors.length > 0 && ancestors.at(-1) !== this) {
+                        ancestors.pop();
+                      }
+                      if (ancestors.includes(value)) {
+                        return "[Circular]";
+                      }
+                      ancestors.push(value);
+                      return value;
+                    };
+                  }
+                req.send(JSON.stringify({"action":"SetIPCResponse", "request_id":requestID, "params": JSON.stringify(response, getCircularReplacer())}));
+            }).catch((e) => {
+                console.error("callChannel error", e);
+                window.__electrico.error = e;
+            });
+        }, 0);
         return event;
     }
     function exctractIPCParams(argumentsstr) {
@@ -163,13 +181,13 @@ var __electrico_nonce=null;
             req.send();
             let script = "//# sourceURL="+main+"\n"+req.responseText;
             script = window.__replaceImports(script);
-            //setTimeout(()=>{
+            setTimeout(()=>{
                 try {
                     window.eval(script);
                 } catch (e) {
                    console.error("error evaluating main script: ", main, e);
                 }
-            //}, 1000);
+            }, 1000);
         },
         callIPCChannel: (argumentsstr) => {
             let p = exctractIPCParams(argumentsstr);

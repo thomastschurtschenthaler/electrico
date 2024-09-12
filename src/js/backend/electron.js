@@ -88,6 +88,17 @@
                 const req = createCMDRequest(true);
                 req.send(JSON.stringify(wrapInvoke({"command":"BrowserWindowMinimized", "id":this.id, "params": {"method":"Set", "minimized":true}})));
             }).bind(this);
+            this.close = (() => {
+                window.__electrico.callAppOn("window-close", this.id);
+            }).bind(this);
+            this.show = (() => {
+                const req = createCMDRequest(true);
+                req.send(JSON.stringify(wrapInvoke({"command":"BrowserWindowShow", "id":this.id, "shown":true}))); 
+            }).bind(this);
+            this.hide = (() => {
+                const req = createCMDRequest(true);
+                req.send(JSON.stringify(wrapInvoke({"command":"BrowserWindowShow", "id":this.id, "shown":false}))); 
+            }).bind(this);
             window.__electrico.browser_window[this.id]=this;
             const req = createCMDRequest(false);
             this.config.title = this.config.title || "Electrico Window";
@@ -113,17 +124,6 @@
         loadURL(url) {
             const req = createCMDRequest(true);
             req.send(JSON.stringify(wrapInvoke({"command":"BrowserWindowLoadfile", "params":{"id":this.id, "file":url, "config": this.config}}))); 
-        }
-        maximize() {
-
-        }
-        show() {
-            const req = createCMDRequest(true);
-            req.send(JSON.stringify(wrapInvoke({"command":"BrowserWindowShow", "id":this.id, "shown":true}))); 
-        }
-        hide() {
-            const req = createCMDRequest(true);
-            req.send(JSON.stringify(wrapInvoke({"command":"BrowserWindowShow", "id":this.id, "shown":false}))); 
         }
         removeMenu = () => {
             console.log("BrowserWindow.removeMenu");

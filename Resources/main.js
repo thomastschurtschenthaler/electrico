@@ -7,13 +7,13 @@ function writeOutput(text, level) {
   mainWindow.webContents.send("writeOutput", text, level);
 }
 
-ipcMain.on('shellcommand', async function(event, command) {
+ipcMain.on('shellcommand', function(event, command) {
   if (command.cmd=="") {
-    writeOutput("command empty", "error");
+    writeOutput("command empty\n", "error");
     return;
   }
   const child = spawn(command.cmd, command.args);
-  writeOutput(`child process started with pid: ${child.pid}`, "info");
+  writeOutput(`child process started with pid: ${child.pid}\n`, "info");
   child.stdout.on('data', (data) => {
       writeOutput(`${data}`, "info");
   });
@@ -23,7 +23,7 @@ ipcMain.on('shellcommand', async function(event, command) {
   });
 
   child.on('close', (code) => {
-      writeOutput(`child process exited with code ${code}`, code==0?"info":"error");
+      writeOutput(`child process exited with code ${code}\n`, code==0?"info":"error");
   });
   if (command.stdin!="") {
       child.stdin.write(command.stdin);

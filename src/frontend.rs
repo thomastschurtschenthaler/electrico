@@ -334,6 +334,12 @@ impl Frontend {
             }
         }
     }
+    pub fn get_actual_window(&mut self) -> Option<&Window>  {
+        if let Some(win) = self.windows.values().last() {
+            return Some(&win.window);
+        }
+        None
+    }
     pub fn dom_content_loaded(&mut self, id:&String, title:String) {
         if let Some(window) = self.windows.get(id) {
             if title.len()>0 {
