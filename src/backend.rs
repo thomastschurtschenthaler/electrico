@@ -122,4 +122,7 @@ impl Backend {
             let _ = self.webview.evaluate_script(&format!("window.__electrico.child_process.callback.on_close('{}');", pid));
         }
     }
+    pub fn get_window(&self) -> &Window {
+        &self._window
+    }
 }

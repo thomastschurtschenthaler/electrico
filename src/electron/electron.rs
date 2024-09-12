@@ -117,7 +117,7 @@ pub fn process_electron_command(tokio_runtime:&Runtime, event_loop:&EventLoopWin
             app_env.app_name = Some(name);
         },
         ElectronCommand::SetApplicationMenu { menu } => {
-            menu_ret = Some(create_menu(menu, &app_env.app_name));
+            menu_ret = Some(create_menu(backend.get_window(), menu, &app_env.app_name));
             respond_ok(responder);
         },
         ElectronCommand::GetAppPath { path } => {

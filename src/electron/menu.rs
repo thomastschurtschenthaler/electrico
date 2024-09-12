@@ -4,6 +4,7 @@ use lazy_static::lazy_static;
 use log::debug;
 use muda::{accelerator::{Accelerator, Code, Modifiers}, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use substring::Substring;
+use tao::window::Window;
 
 use crate::electron::types::AppMenu;
 
@@ -130,7 +131,7 @@ fn populate_menu(sub_menu:&Submenu, menu:&Vec<super::types::Menu>, app_name:&Opt
     }
 }
 
-pub fn create_menu(menu:Vec<AppMenu>, app_name:&Option<String>) -> Menu {
+pub fn create_menu(window:&Window, menu:Vec<AppMenu>, app_name:&Option<String>) -> Menu {
     let keys_map: std::sync::MutexGuard<'_, HashMap<&str, Code>> = KEYS.lock().unwrap();
     let mods_map: std::sync::MutexGuard<'_, HashMap<&str, Modifiers>> = MODIFIERS.lock().unwrap();
     let main_menu = Menu::new();
