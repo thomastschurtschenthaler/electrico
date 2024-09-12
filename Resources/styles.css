@@ -1,0 +1,13 @@
+.output {
+    color:beige;
+    background-color: darkslateblue;
+    width: 50rem;
+    height: 30rem;
+}
+
+.info {
+    color:greenyellow;
+}
+.error {
+    color:lightsalmon;
+}

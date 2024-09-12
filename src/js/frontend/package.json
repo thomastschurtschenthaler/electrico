@@ -1,0 +1,10 @@
+{
+  "name": "electrico-frontend",
+  "version": "0.5.0",
+  "description": "Electrico Frontend JS",
+  "author": "Thomas Tschurtschenthaler",
+  "dependencies": {
+    "buffer": "^6.0.3",
+    "eventemitter3": "^5.0.1"
+  }
+}

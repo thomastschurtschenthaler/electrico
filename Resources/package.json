@@ -1,0 +1,19 @@
+{
+  "name": "electrico-example",
+  "version": "1.0.0",
+  "description": "Electrico Example App",
+  "build": {
+    "productName": "Electrico Example App"
+  },
+  "main": "main.js",
+  "author": "Thomas Tschurtschenthaler",
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+   
+  },
+  "dependencies": {
+    "electron": "30"
+  }
+}
