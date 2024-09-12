@@ -8,7 +8,7 @@
             get(target, prop, receiver) {
                 if (prop=="versions") {
                     const req = new _XMLHttpRequest();
-                    req.open("POST", "ipc://ipc/send", false);
+                    req.open("POST", window.__create_protocol_url("ipc://ipc/send"), false);
                     req.send(JSON.stringify({"action":"GetProcessInfo"}));
                     return JSON.parse(req.responseText).versions;
                 } else if (prop=="on") {
@@ -36,12 +36,12 @@
         });
         window.alert = (msg) => {
             const req = new XMLHttpRequest();
-            req.open("POST", "ipc://ipc/send", false);
+            req.open("POST", window.__create_protocol_url("ipc://ipc/send"), false);
             req.send(JSON.stringify({"action": "Alert", "message": msg}));
         }
         function sendIPC(request_id, nonce, async, ...args) {
             const req = new _XMLHttpRequest();
-            req.open("POST", "ipc://ipc/send", async);
+            req.open("POST", window.__create_protocol_url("ipc://ipc/send"), async);
             req.send(JSON.stringify({"action":"PostIPC", "request_id":request_id, "nonce": nonce, "params":JSON.stringify(args)}));
             return req;
         }
@@ -180,7 +180,7 @@
     window.Buffer=Buffer;
     window.addEventListener("DOMContentLoaded", ()=>{
         const req = new XMLHttpRequest();
-        req.open("POST", "ipc://ipc/send", true);
+        req.open("POST", window.__create_protocol_url("ipc://ipc/send"), true);
         req.send(JSON.stringify({"action": "DOMContentLoaded", "title": document.title}));
     })
 })();

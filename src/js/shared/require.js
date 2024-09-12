@@ -28,14 +28,14 @@
                 }
             }
 
-            let module_path = found_sp!=null?window.__electrico.module_paths[found_sp]:"fil://file";
+            let module_path = found_sp!=null?window.__electrico.module_paths[found_sp]:window.__create_protocol_url("fil://file");
             //console.trace("load module", mpath, module_path, stack_path);
 
             let expanded_path = module_path;
             if (mpath.startsWith(".")) {
                 expanded_path+=mpath.substring(1, mpath.length);
             } else {
-                expanded_path="fil://file/node_modules/"+mpath;
+                expanded_path=window.__create_protocol_url("fil://file/node_modules/"+mpath);
             }
             
             let cached = fromCache(expanded_path);

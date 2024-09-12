@@ -167,11 +167,15 @@ impl Frontend {
             trace!("frontend fil: fpath {}", fpath);
             let _ = proxy.send_event(ElectricoEvents::ExecuteCommand {command:Command::BrowserWindowReadFile { browser_window_id:fil_handler_id.clone(), file_path: fpath}, responder});
         };
-       
+
+        let mut is_windows="false";
+        #[cfg(target_os = "windows")] {
+            is_windows = "true";
+        }
         let webview = WebViewBuilder::new(&window)
             .with_asynchronous_custom_protocol("fil".into(), fil_handler)
             .with_asynchronous_custom_protocol("ipc".into(), ipc_handler)
-            .with_initialization_script(("var __electrico_nonce='".to_string()+config_params.id.clone().as_str()+"'; window.__electrico_preload=function(document){\nvar window=document.window; var require=document.window.require;\n"+preload_script.as_str()+"\n};\n"+self.frontendalljs.as_str()+"\n__electrico_nonce='';\n").as_str())
+            .with_initialization_script(("window.__is_windows=".to_string()+is_windows+";var __electrico_nonce='"+config_params.id.clone().as_str()+"'; window.__electrico_preload=function(document){\nvar window=document.window; var require=document.window.require;\n"+preload_script.as_str()+"\n};\n"+self.frontendalljs.as_str()+"\n__electrico_nonce='';\n").as_str())
             .with_navigation_handler(nav_handler)
             .with_devtools(true)
             .build().unwrap();

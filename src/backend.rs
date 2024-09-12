@@ -60,14 +60,17 @@ impl Backend {
             trace!("trying load file {}", file.clone().as_mut_os_str().to_str().unwrap());
             handle_file_request(&tokio_runtime, fpath, file, &backend_js_files, responder);
         };
-
+        let mut is_windows="false";
+        #[cfg(target_os = "windows")] {
+            is_windows = "true";
+        }
         let webview = WebViewBuilder::new(&window)
             .with_html("<h1>Electrico Node Backend</h1>")
             .with_asynchronous_custom_protocol("fil".into(), fil_handler)
             .with_asynchronous_custom_protocol("cmd".into(), cmd_handler)
             .with_devtools(true)
             .with_incognito(true)
-            .with_initialization_script(init_script.as_str())
+            .with_initialization_script(("window.__is_windows=".to_string()+is_windows+";"+init_script.as_str()).as_str())
             .build().unwrap();
           
         #[cfg(debug_assertions)]

@@ -1,6 +1,6 @@
 var __electrico_nonce=null;
 (function() {
-    let wkeys = ['location', 'screen', 'createWindow', 'setTimeout', 'fetch', '__init_shared', '__init_require', 'btoa', 'atob'];
+    let wkeys = ['location', 'screen', '__is_windows', 'createWindow', 'setTimeout', 'fetch', '__init_shared', '__init_require', 'btoa', 'atob'];
     for (let k in window) {
         if (!wkeys.includes(k)) {
             window[k]=()=>{};
@@ -159,7 +159,7 @@ var __electrico_nonce=null;
         loadMain: (main) => {
             window.__dirname = window.__electrico.appPath+(main.indexOf("/")>=0?("/"+main.substring(0, main.indexOf("/"))):"");
             const req = new XMLHttpRequest();
-            req.open("GET", "fil://file/"+main, false);
+            req.open("GET", window.__create_protocol_url("fil://file/"+main), false);
             req.send();
             let script = "//# sourceURL="+main+"\n"+req.responseText;
             script = window.__replaceImports(script);
