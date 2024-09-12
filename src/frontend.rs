@@ -201,7 +201,11 @@ impl Frontend {
             if fpath.starts_with("http://") || fpath.starts_with("https://") {
                 let _ = window.webview.load_url(fpath.as_str());
             } else {
-                let _ = window.webview.load_url(format!("fil://file/{}", fpath).as_str());
+                let mut url="fil://file/";
+                #[cfg(target_os = "windows")] {
+                    url = "http://fil.file/";
+                }
+                let _ = window.webview.load_url((url.to_string() + fpath.as_str()).as_str());
             }
             
         } else {
