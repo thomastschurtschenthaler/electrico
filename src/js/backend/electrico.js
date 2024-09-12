@@ -165,13 +165,13 @@ var __electrico_nonce=null;
             req.send();
             let script = "//# sourceURL="+main+"\n"+req.responseText;
             script = window.__replaceImports(script);
-            setTimeout(()=>{
+            //setTimeout(()=>{
                 try {
                     window.eval(script);
                 } catch (e) {
                    console.error("error evaluating main script: ", main, e);
                 }
-            }, 1000);
+            //}, 1000);
         },
         callIPCChannel: (argumentsstr) => {
             let p = exctractIPCParams(argumentsstr);
