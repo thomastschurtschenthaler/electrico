@@ -112,7 +112,7 @@ impl Backend {
         let _ = self.webview.evaluate_script(format!("window.__electrico.domContentLoaded('{}');", id).as_str());
     }
     pub fn child_process_callback(&mut self, pid:&String, stream:&String, data:&String) {
-        debug!("child_process_callback {}", data);
+        trace!("child_process_callback {}", data);
         let _ = self.webview.evaluate_script(&format!("window.__electrico.child_process.callback.on_{}('{}', '{}');", stream, pid, escape(data).as_str()));
     }
     pub fn child_process_exit(&mut self, pid:&String, exit_code:&Option<i32>) {

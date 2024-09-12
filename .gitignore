@@ -2,3 +2,5 @@
 /.cargo
 /Cargo.lock
 /target
+/Resources/node_modules
+Resources/package-lock.json

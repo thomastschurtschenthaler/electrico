@@ -330,7 +330,7 @@ pub fn process_node_command(tokio_runtime:&Runtime, app_env:&AppEnv, proxy:Event
                             }
                             let mut exit_code:Option<i32> = None;
                             loop {
-                                sleep(Duration::from_millis(100)).await;
+                                sleep(Duration::from_millis(1)).await;
                                 if let Ok(data) = receiver.try_recv() {
                                     trace!("writing stdin {}", data.len());
                                     let _ = stdin.write(data.as_slice());

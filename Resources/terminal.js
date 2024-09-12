@@ -20,7 +20,7 @@ document.getElementById("send").onclick = (e) => {
     args = args=args!=""?args.split(" "):null;
     callshell({cmd:cmd, args:args, stdin:stdin});
 };
-window.onWriteOutput((text, level) => {
+window.onWriteOutput((event, text, level) => {
     text = text.replaceAll("\n", "<br>").replaceAll("\r", "<br>");
     let html = level!=null?("<div class='"+level+"'>"+text+"</div>"):text;
     document.getElementById("output").innerHTML+=html;

@@ -34,7 +34,7 @@ fn main() -> wry::Result<()> {
     .expect("Can't find path to executable");
 
   while rsrc_dir.pop() {
-    let rsrc_link_dir = rsrc_dir.join("Resources.json");
+    let rsrc_link_dir = rsrc_dir.join("ResourcesLink.json");
     let rsrc_link = Path::new(&rsrc_link_dir);
     if rsrc_link.exists() {
       let res:Result<Resources, Error> = serde_json::from_str(fs::read_to_string(rsrc_link).unwrap().as_str());

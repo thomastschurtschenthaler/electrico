@@ -12,8 +12,7 @@ const { ipcRenderer, contextBridge } = require('electron');
 contextBridge.exposeInMainWorld("callshell", (command)=>{
     ipcRenderer.send("shellcommand", command);
 });
-
-window.onWriteOutput = (callback) => {
+contextBridge.exposeInMainWorld("onWriteOutput", (callback) => {
   ipcRenderer.removeAllListeners("writeOutput");
   ipcRenderer.on("writeOutput", callback);
-};
+});

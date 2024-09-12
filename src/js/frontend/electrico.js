@@ -130,7 +130,7 @@
                 let sep_channel = argumentsstr.indexOf("@");
                 let channel = argumentsstr.substring(0, sep_channel);
                 let args = JSON.parse(argumentsstr.substring(sep_channel+1, argumentsstr.length));
-                ipcRenderer.emit(channel, ...args);
+                ipcRenderer.emit(channel, {}, ...args);
             }
         };
         window.__electrico_preload(document);
