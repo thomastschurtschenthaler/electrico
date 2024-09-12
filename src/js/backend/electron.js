@@ -216,15 +216,16 @@
         Menu: {
             buildFromTemplate(template) {
                 let idmapping = menuBuildFromTemplate(template);
-                return {menu:template, idmapping:idmapping};
+                window.__electrico.app_menu.idmapping=idmapping;
+                return template;
             },
             setApplicationMenu(menu) {
-                window.__electrico.app_menu=menu;
+                window.__electrico.app_menu.menu=menu;
                 const req = createCMDRequest(true);
-                req.send(JSON.stringify(wrapInvoke({"command":"SetApplicationMenu", "menu": menu.menu})));
+                req.send(JSON.stringify(wrapInvoke({"command":"SetApplicationMenu", "menu": menu})));
             },
             getApplicationMenu() {
-                return window.__electrico.app_menu;
+                return window.__electrico.app_menu.menu;
             }
         },
         screen: {

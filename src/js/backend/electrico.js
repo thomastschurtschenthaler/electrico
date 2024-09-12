@@ -92,23 +92,7 @@ var __electrico_nonce=null;
                 event.returnValue = response;
                 timeout.cleared = true;
                 const req = createCMDRequest(true);
-                function getCircularReplacer() {
-                    const ancestors = [];
-                    return function (key, value) {
-                      if (typeof value !== "object" || value === null) {
-                        return value;
-                      }
-                      while (ancestors.length > 0 && ancestors.at(-1) !== this) {
-                        ancestors.pop();
-                      }
-                      if (ancestors.includes(value)) {
-                        return "[Circular]";
-                      }
-                      ancestors.push(value);
-                      return value;
-                    };
-                  }
-                req.send(JSON.stringify({"action":"SetIPCResponse", "request_id":requestID, "params": JSON.stringify(response, getCircularReplacer())}));
+                req.send(JSON.stringify({"action":"SetIPCResponse", "request_id":requestID, "params": JSON.stringify(response)}));
             }).catch((e) => {
                 console.error("callChannel error", e);
                 window.__electrico.error = e;
@@ -126,7 +110,7 @@ var __electrico_nonce=null;
         }
     }
     window.__electrico={
-        app_menu:null,
+        app_menu:{},
         module_paths: {},
         module_cache: {},
         child_process: {

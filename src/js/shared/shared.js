@@ -1,5 +1,25 @@
 (function() {
     function init_shared (window, backend) {
+        function getCircularReplacer() {
+            const ancestors = [];
+            return function (key, value) {
+              if (typeof value !== "object" || value === null) {
+                return value;
+              }
+              while (ancestors.length > 0 && ancestors.at(-1) !== this) {
+                ancestors.pop();
+              }
+              if (ancestors.includes(value)) {
+                return null;
+              }
+              ancestors.push(value);
+              return value;
+            };
+        }
+        let _stringify = JSON.stringify;
+        JSON.stringify = (obj, r) => {
+            return _stringify(obj, r!=null?r:getCircularReplacer());
+        };
         window.__create_protocol_url = (url) => {
             if (window.__is_windows) {
                 let ix = url.indexOf(":");
