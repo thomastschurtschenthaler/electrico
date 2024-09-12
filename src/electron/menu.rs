@@ -144,8 +144,10 @@ pub fn create_menu(window:&Window, menu:Vec<AppMenu>, app_name:&Option<String>) 
         populate_menu(&sub_menu, &app_menu.submenu, app_name, &keys_map, &mods_map);
         let _ = main_menu.append(&sub_menu);
     }
-    #[cfg(target_os = "windows")] 
-    main_menu.init_for_hwnd(window.hwnd() as _).unwrap();
+    #[cfg(target_os = "windows")] {
+        use tao::platform::windows::WindowExtWindows;
+        main_menu.init_for_hwnd(window.hwnd() as _).unwrap();
+    }
     #[cfg(target_os = "linux")]
     main_menu.init_for_gtk_window(window.gtk_window(), window.default_vbox());
     #[cfg(target_os = "macos")]
