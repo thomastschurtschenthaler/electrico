@@ -149,8 +149,10 @@ pub fn create_menu(window:Option<&Window>, menu:Vec<AppMenu>, app_name:&Option<S
             use tao::platform::windows::WindowExtWindows;
             main_menu.init_for_hwnd(window.hwnd() as _).unwrap();
         }
-        #[cfg(target_os = "linux")]
-        main_menu.init_for_gtk_window(window.gtk_window(), window.default_vbox());
+        #[cfg(target_os = "linux")] {
+            use tao::platform::unix::WindowExtUnix;
+            let _ = main_menu.init_for_gtk_window(window.gtk_window(), window.default_vbox());
+        }
     }
     #[cfg(target_os = "macos")]
     main_menu.init_for_nsapp();
