@@ -16,3 +16,4 @@ contextBridge.exposeInMainWorld("onWriteOutput", (callback) => {
   ipcRenderer.removeAllListeners("writeOutput");
   ipcRenderer.on("writeOutput", callback);
 });
+contextBridge.exposeInMainWorld("platform", process.platform);

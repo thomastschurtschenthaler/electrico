@@ -29,7 +29,7 @@ pub enum Command {
 #[serde(tag = "action")]
 pub enum FrontendCommand {
   PostIPC {request_id:String, nonce:String, params: String},
-  GetProcessInfo,
+  GetProcessInfo {nonce:String},
   DOMContentLoaded {title: String},
   Alert {message: String}
 }

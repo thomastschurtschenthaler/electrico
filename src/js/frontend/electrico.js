@@ -4,36 +4,6 @@
         let _XMLHttpRequest = XMLHttpRequest;
         var window=document.window;
         __init_shared(window);
-        window.process=new Proxy({}, {
-            get(target, prop, receiver) {
-                if (prop=="versions") {
-                    const req = new _XMLHttpRequest();
-                    req.open("POST", window.__create_protocol_url("ipc://ipc/send"), false);
-                    req.send(JSON.stringify({"action":"GetProcessInfo"}));
-                    return JSON.parse(req.responseText).versions;
-                } else if (prop=="on") {
-                    return (event, f) => {
-                        //console.log("process on", event, f);
-                    }
-                } else if (prop=="electronBinding") {
-                    //console.log("electronBinding");
-                    return (nodeversion) => {
-                        return {
-                            getHiddenValue: (w) => {
-                                //console.log("getHiddenValue");
-                                return "electrico";
-                            },
-                            isViewApiEnabled: () => {
-                                true;
-                            }
-                        }
-                    }
-                } else if (prop=="argv") {
-                    return [];
-                }
-                return null;
-            }
-        });
         window.alert = (msg) => {
             const req = new XMLHttpRequest();
             req.open("POST", window.__create_protocol_url("ipc://ipc/send"), false);
@@ -50,6 +20,41 @@
                 (+c ^ window.crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> +c / 4).toString(16)
             );
         }
+        function processi(nonce) {
+            let _processInfo=null;
+            return new Proxy({}, {
+                get(target, prop, receiver) {
+                    if (_processInfo==null) {
+                        const req = new _XMLHttpRequest();
+                        req.open("POST", window.__create_protocol_url("ipc://ipc/send"), false);
+                        req.send(JSON.stringify({"action":"GetProcessInfo", "nonce":nonce}));
+                        _processInfo = JSON.parse(req.responseText);
+                    }
+                    if (prop=="on") {
+                        return (event, f) => {
+                            //console.log("process on", event, f);
+                        }
+                    } else if (prop=="electronBinding") {
+                        //console.log("electronBinding");
+                        return (nodeversion) => {
+                            return {
+                                getHiddenValue: (w) => {
+                                    //console.log("getHiddenValue");
+                                    return "electrico";
+                                },
+                                isViewApiEnabled: () => {
+                                    true;
+                                }
+                            }
+                        }
+                    } else if (prop=="argv") {
+                        return [];
+                    }
+                    return _processInfo[prop];
+                }
+            });
+        }
+        window.process = processi(__electrico_nonce);
         let _electron_i = {};
         
         let _electron = function(nonce) {
@@ -133,7 +138,21 @@
                 ipcRenderer.emit(channel, {}, ...args);
             }
         };
-        window.__electrico_preload(document);
+        let _addEventListener = window.addEventListener;
+        window.__electrico_preload(document, {
+            before: (nonce) => {
+                window.addEventListener = (e, h) => {
+                    _addEventListener(e, (e)=>{
+                        process=processi(nonce);
+                        h(e);
+                    })
+                };
+            },
+            after: () => {
+                window.addEventListener=_addEventListener;
+                delete window.process;
+            }
+        });
         //setTimeout(()=>{window.__electrico_preload(document);}, 1000);
         
         let start = (new Date()).getTime();

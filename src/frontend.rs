@@ -69,7 +69,12 @@ impl Frontend {
                             }
                             let _ = ipc_proxy.send_event(ElectricoEvents::ExecuteCommand{command:Command::PostIPC {browser_window_id:ipc_handler_id.clone(), request_id, params}, responder});
                         },
-                        FrontendCommand::GetProcessInfo => {
+                        FrontendCommand::GetProcessInfo {nonce} => {
+                            if nonce!=ipc_handler_id {
+                                error!("frontend GetProcessInfo call nonce does not match - forbidden client-nonce:{} backend-nonce:{}", nonce, ipc_handler_id.clone());
+                                respond_status(StatusCode::FORBIDDEN, CONTENT_TYPE_TEXT.to_string(), "forbidden".to_string().into_bytes(), responder);
+                                return;
+                            }
                             let _ = ipc_proxy.send_event(ElectricoEvents::ExecuteCommand{command:Command::Node { invoke: crate::node::types::NodeCommand::GetProcessInfo }, responder});
                         },
                         FrontendCommand::DOMContentLoaded {title } => {
@@ -177,7 +182,7 @@ impl Frontend {
         let webview = WebViewBuilder::new(&window)
             .with_asynchronous_custom_protocol("fil".into(), fil_handler)
             .with_asynchronous_custom_protocol("ipc".into(), ipc_handler)
-            .with_initialization_script(("window.__is_windows=".to_string()+is_windows+";var __electrico_nonce='"+config_params.id.clone().as_str()+"'; window.__electrico_preload=function(document){\nvar window=document.window; var require=document.window.require;\n"+preload_script.as_str()+"\n};\n"+self.frontendalljs.as_str()+"\n__electrico_nonce='';\n").as_str())
+            .with_initialization_script(("window.__is_windows=".to_string()+is_windows+";var __electrico_nonce='"+config_params.id.clone().as_str()+"'; window.__electrico_preload=function(document, ph){\nph.before(__electrico_nonce); var window=document.window; var require=document.window.require;\n"+preload_script.as_str()+"\nph.after();\n};\n"+self.frontendalljs.as_str()+"\n__electrico_nonce='';\n").as_str())
             .with_navigation_handler(nav_handler)
             .with_devtools(true)
             .build().unwrap();
