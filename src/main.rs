@@ -232,6 +232,10 @@ fn main() -> wry::Result<()> {
           }
         }
       },
+      Event::UserEvent(ElectricoEvents::SendChannelMessageRetry { browser_window_id, channel, args }) => {
+        trace!("SendChannelMessageRetry");
+        frontend.send_channel_message(proxy.clone(), browser_window_id, channel, args);
+      },
       Event::UserEvent(ElectricoEvents::ChildProcessStart { pid, sender }) => {
         trace!("ChildProcessStart {}", pid);
         child_process.insert(pid, sender);

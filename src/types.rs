@@ -38,6 +38,7 @@ pub enum ElectricoEvents {
   ExecuteCommand {command: Command, responder: RequestAsyncResponder},
   FrontendNavigate {browser_window_id:String, page: String, preload: String},
   IPCCallRetry {browser_window_id:String, request_id:String, params:String, sender:Sender<IPCMsg>},
+  SendChannelMessageRetry { browser_window_id:String, channel:String, args:String},
   Exit,
   ChildProcessData {pid:String, stream:String, data:Vec<u8>},
   ChildProcessStart {pid:String, sender:Sender<Vec<u8>>},

@@ -136,6 +136,7 @@
                 let channel = argumentsstr.substring(0, sep_channel);
                 let args = JSON.parse(argumentsstr.substring(sep_channel+1, argumentsstr.length));
                 ipcRenderer.emit(channel, {}, ...args);
+                return "OK";
             }
         };
         let _addEventListener = window.addEventListener;

@@ -85,7 +85,7 @@ pub fn process_electron_command(tokio_runtime:&Runtime, event_loop:&EventLoopWin
             respond_ok(responder);
         },
         ElectronCommand::ChannelSendMessage {id, channel, args} => {
-            frontend.send_channel_message(&id, &channel, &args);
+            frontend.send_channel_message(proxy, id, channel, args);
             respond_ok(responder);
         },
         ElectronCommand::ExecuteJavascript {id, script} => {
