@@ -1,4 +1,4 @@
-use log::{debug, error, trace};
+use log::{debug, error, trace, warn};
 use include_dir::{include_dir, Dir};
 use reqwest::StatusCode;
 use substring::Substring;
@@ -133,7 +133,7 @@ impl Frontend {
                             window.set_window_icon(Some(icon));
                         },
                         Err(e) => {
-                            error!("icon could not be built: {}", e);
+                            warn!("icon could not be built: {}", e);
                         }
                     }
                 },
