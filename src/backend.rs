@@ -25,6 +25,7 @@ impl Backend {
         let init_script = backendjs+"\nwindow.__electrico.loadMain('"+package.main.to_string().as_str()+"');";
         let window = WindowBuilder::new()
             .with_title("Electrico Node backend")
+            .with_visible(false)
             .build(event_loop)
             .unwrap();
         
@@ -75,7 +76,6 @@ impl Backend {
           
         #[cfg(debug_assertions)]
         webview.open_devtools();
-        window.set_visible(false);
         Backend {
             _window:window,
             webview:webview

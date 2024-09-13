@@ -21,7 +21,7 @@ document.getElementById("send").onclick = (e) => {
     callshell({cmd:cmd, args:args, stdin:stdin});
 };
 window.onWriteOutput((event, text, level) => {
-    text = text.replaceAll("\n", "<br>").replaceAll("\r", "<br>");
+    text = text.replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll("\r\n", "<br>").replaceAll("\n", "<br>").replaceAll("\r", "<br>");
     let html = level!=null?("<span class='"+level+"'>"+text+"</span>"):text;
     document.getElementById("output").innerHTML+=html;
 });
