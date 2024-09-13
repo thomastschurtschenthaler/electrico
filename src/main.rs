@@ -201,13 +201,13 @@ fn main() -> wry::Result<()> {
               trace!("BrowserWindowReadFile {} {}", browser_window_id, file_path);
               match frontend.get_client_path_base(&browser_window_id) {
                   Some(client_path_base) => {
-                      /*if !file_path.starts_with(client_path_base.as_str()) {
-                          error!("browser client access to file forbidden: {} {}", file_path, client_path_base);
-                          respond_status(StatusCode::FORBIDDEN, CONTENT_TYPE_HTML.to_string(), "forbidden".to_string().into_bytes(), responder);
-                          return;
-                      }*/
-                      let file = rsrc_dir.join(file_path.clone());
-                      handle_file_request(&tokio_runtime, file_path, file, &frontend_js_files, responder);
+                    let file = rsrc_dir.join(file_path.clone());
+                    if !file.starts_with(client_path_base) {
+                        error!("browser client access to file forbidden: {} {}", file.as_os_str().to_str().unwrap(), client_path_base.as_os_str().to_str().unwrap());
+                        respond_status(StatusCode::FORBIDDEN, CONTENT_TYPE_HTML.to_string(), "forbidden".to_string().into_bytes(), responder);
+                        return;
+                    }  
+                    handle_file_request(&tokio_runtime, file_path, file, &frontend_js_files, responder);
                   },
                   None => {
                       error!("browser client access to file forbidden - no client_path_base: {}", file_path);

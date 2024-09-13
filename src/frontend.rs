@@ -12,7 +12,7 @@ pub struct FrontendWindow {
     window:Window,
     webview:WebView,
     id:WindowId,
-    client_path_base:Option<String>
+    client_path_base:Option<PathBuf>
 }
 impl FrontendWindow {
     pub fn new(window:Window, webview:WebView, id:WindowId) -> FrontendWindow {
@@ -23,8 +23,8 @@ impl FrontendWindow {
             client_path_base:None
         }
     }
-    pub fn set_client_path_base(&mut self, client_path_base:String) {
-        self.client_path_base = Some(client_path_base);
+    pub fn set_client_path_base(&mut self, client_path_base:Option<PathBuf>) {
+        self.client_path_base = client_path_base;
     }
 }
 
@@ -148,12 +148,14 @@ impl Frontend {
         };
         let preload_file = self.rsrc_dir.clone().join(preload_init.clone());
         let mut preload_script = "".to_string();
-        match std::fs::read_to_string(preload_file) {
-            Ok(preloadfilejs) => {
-                preload_script = preloadfilejs;
-            },
-            Err(_e) => {
-                error!("cant load preload file {}", preload_init);
+        if preload_init.len()>0 {
+            match std::fs::read_to_string(preload_file) {
+                Ok(preloadfilejs) => {
+                    preload_script = preloadfilejs;
+                },
+                Err(_e) => {
+                    error!("cant load preload file {}", preload_init);
+                }
             }
         }
 
@@ -190,21 +192,19 @@ impl Frontend {
     }
     pub fn load_url(&mut self, id:&String, fpath:String) {
         if let Some(window) = self.windows.get_mut(id) {
-            match fpath.rfind("/") {
-                Some(pos) => {
-                    window.set_client_path_base(fpath.substring(0, pos).to_string());
-                },
-                None => {
-                    window.set_client_path_base("".to_string());
-                }
-            }
             if fpath.starts_with("http://") || fpath.starts_with("https://") {
+                #[cfg(debug_assertions)]
+                window.set_client_path_base(Some(self.rsrc_dir.clone()));
+                #[cfg(not(debug_assertions))]
+                window.set_client_path_base(None);
+                
                 let _ = window.webview.load_url(fpath.as_str());
             } else {
                 let mut url="fil://file/";
                 #[cfg(target_os = "windows")] {
                     url = "http://fil.file/";
                 }
+                window.set_client_path_base(Some(self.rsrc_dir.clone()));
                 let _ = window.webview.load_url((url.to_string() + fpath.as_str()).as_str());
             }
             
@@ -252,12 +252,12 @@ impl Frontend {
     pub fn get_id(&mut self, id:&WindowId) -> Option<&String> {
         self.window_ids.get(id)
     }
-    pub fn get_client_path_base(&mut self, id:&String) -> Option<String> {
+    pub fn get_client_path_base(&mut self, id:&String) -> &Option<PathBuf> {
         if let Some(window) = self.windows.get(id) {
-            window.client_path_base.clone()
+            &window.client_path_base
         } else {
             error!("get_client_path_base - frontend_webview not there - id: {}", id);
-            None
+            &None
         }
     }
     pub fn content_bounds(&mut self, id:&String) -> Option<Rectangle> {
