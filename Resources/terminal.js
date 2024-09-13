@@ -3,7 +3,7 @@ let html = `<h2>Send Shell Command</h2>
                 <label for="cmd">Command:</label>
                 <input type="text" id="cmd" value="${platform=='win32'?'cmd':'ls'}">
                 <label for="args">Arguments:</label>
-                <input type="text" id="args" value="${platform=='win32'?'dir':'-ltr'}">
+                <input type="text" id="args" value="${platform=='win32'?'/C dir':'-ltr'}">
                 <label for="stdin">stdin:</label>
                 <input type="text" id="stdin">
                 <button id="send">Send</button>
