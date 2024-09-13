@@ -6,7 +6,7 @@ authors = ["Thomas Tschurtschenthaler"]
 license = "MIT OR Apache-2.0"
 description = "Lightweight Electron 'compatible' App Container."
 
-[package.metadata.bundle.ttschurtschenthaler.downlet]
+[package.metadata.bundle.ttschurtschenthaler.electrico]
 name = "Electrico"
 identifier = "com.ttschurtschenthaler.electrico"
 icon = ["icons/icon*.png"]
@@ -35,37 +35,84 @@ serde_json = { version = "1.0.128"}
 serde = {version = "1.0.210"}
 rfd = {version="0.14.1"}
 tokio = {version = "1.40.0", features = ["full"]}
-
 reqwest = {version = "0.12.7"}
 substring = {version = "1.4.5"}
 open = {version = "5.3.0"}
-
 mime_guess = {version = "2.0.5"}
 lazy_static = {version = "1.5.0"}
 base64 = {version = "0.22.1"}
 directories = {version = "5.0.1"}
 
-[target."cfg(target_os = \"windows\")".dependencies.windows-sys]
-version = "0.59.0"
-features = [
-  "Win32_UI_WindowsAndMessaging",
-  "Win32_Foundation",
-  "Win32_Graphics_Gdi",
-  "Win32_UI_Shell",
-  "Win32_Globalization",
-  "Win32_UI_Input_KeyboardAndMouse",
-  "Win32_System_SystemServices",
-  "Win32_UI_Accessibility",
-  "Win32_UI_HiDpi",
-  "Win32_System_LibraryLoader",
-  "Win32_UI_Controls"
+[features]
+default = [ "drag-drop", "objc-exception", "protocol", "os-webview" ]
+objc-exception = [ "objc/exception" ]
+drag-drop = [ ]
+protocol = [ ]
+devtools = [ ]
+transparent = [ ]
+fullscreen = [ ]
+linux-body = [ "webkit2gtk/v2_40", "os-webview" ]
+mac-proxy = [ ]
+os-webview = [
+  "javascriptcore-rs",
+  "webkit2gtk",
+  "webkit2gtk-sys",
+  "dep:gtk",
+  "soup3",
+  "x11-dl",
+  "gdkx11"
 ]
 
-[target."cfg(target_os = \"linux\")".dependencies]
-gtk = "0.18"
-libxdo = { version = "0.6.0", optional = true }
+[target."cfg(target_os = \"windows\")".dependencies]
+webview2-com = "0.33"
+windows-version = "0.1"
+windows-core = "0.58"
+dunce = "1"
 
-[target."cfg(target_os = \"macos\")".dependencies]
-cocoa = "0.26.0"
+[target."cfg(target_os = \"windows\")".dependencies.windows]
+version = "0.58"
+features = [
+  "implement",
+  "Win32_Foundation",
+  "Win32_Graphics_Gdi",
+  "Win32_System_Com",
+  "Win32_System_Com_StructuredStorage",
+  "Win32_System_LibraryLoader",
+  "Win32_System_Ole",
+  "Win32_System_SystemInformation",
+  "Win32_System_SystemServices",
+  "Win32_UI_Shell",
+  "Win32_UI_WindowsAndMessaging",
+  "Win32_Globalization",
+  "Win32_UI_HiDpi",
+  "Win32_UI_Input",
+  "Win32_UI_Input_KeyboardAndMouse"
+]
+
+[target."cfg(any(target_os = \"linux\", target_os = \"dragonfly\", target_os = \"freebsd\", target_os = \"openbsd\", target_os = \"netbsd\"))".dependencies]
+javascriptcore-rs = { version = "=1.1.2", features = [ "v2_28" ], optional = true }
+webkit2gtk = { version = "=2.0.1", features = [ "v2_38" ], optional = true }
+webkit2gtk-sys = { version = "=2.0.1", optional = true }
+gtk = { version = "0.18", optional = true }
+soup3 = { version = "0.7.0", optional = true }
+x11-dl = { version = "2.21", optional = true }
+gdkx11 = { version = "0.18", optional = true }
+percent-encoding = "2.3"
+
+[target."cfg(any(target_os = \"ios\", target_os = \"macos\"))".dependencies]
+block = "0.1"
+cocoa = "0.26"
+core-graphics = "0.24"
 objc = "0.2"
-png = "0.17"
+objc_id = "0.1"
+
+[target."cfg(target_os = \"android\")".dependencies]
+crossbeam-channel = "0.5"
+html5ever = "0.29.0"
+kuchiki = { package = "kuchikiki", version = "0.8" }
+sha2 = "0.10"
+base64 = "0.22"
+jni = "0.21"
+ndk = "0.9"
+tao-macros = "0.1.3"
+libc = "0.2"
