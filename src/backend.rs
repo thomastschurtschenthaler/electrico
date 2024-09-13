@@ -30,7 +30,7 @@ impl Backend {
             .unwrap();
         
         let cmd_handler = move |request: Request<Vec<u8>>, responder:RequestAsyncResponder| {
-            trace!("backend cmd request {}", request.uri().path().to_string());
+            trace!("backend cmd request {} {}", request.uri().path().to_string(), request.body().len());
             let msgr =  String::from_utf8(request.body().to_vec());
             match msgr {
                 Ok(msg) => {
@@ -65,7 +65,29 @@ impl Backend {
         #[cfg(target_os = "windows")] {
             is_windows = "true";
         }
-        let webview = WebViewBuilder::new(&window)
+
+        #[cfg(any(
+            target_os = "windows",
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "android"
+        ))]
+        let builder = WebViewBuilder::new(&window);
+    
+        #[cfg(not(any(
+            target_os = "windows",
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "android"
+        )))]
+        let builder = {
+            use tao::platform::unix::WindowExtUnix;
+            use wry::WebViewBuilderExtUnix;
+            let vbox = window.default_vbox().unwrap();
+            WebViewBuilder::new_gtk(vbox)
+        };
+
+        let webview = builder
             .with_html("<h1>Electrico Node Backend</h1>")
             .with_asynchronous_custom_protocol("fil".into(), fil_handler)
             .with_asynchronous_custom_protocol("cmd".into(), cmd_handler)

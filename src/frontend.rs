@@ -179,7 +179,29 @@ impl Frontend {
         #[cfg(target_os = "windows")] {
             is_windows = "true";
         }
-        let webview = WebViewBuilder::new(&window)
+
+        #[cfg(any(
+            target_os = "windows",
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "android"
+        ))]
+        let builder = WebViewBuilder::new(&window);
+    
+        #[cfg(not(any(
+            target_os = "windows",
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "android"
+        )))]
+        let builder = {
+            use tao::platform::unix::WindowExtUnix;
+            use wry::WebViewBuilderExtUnix;
+            let vbox = window.default_vbox().unwrap();
+            WebViewBuilder::new_gtk(vbox)
+        };
+
+        let webview = builder
             .with_asynchronous_custom_protocol("fil".into(), fil_handler)
             .with_asynchronous_custom_protocol("ipc".into(), ipc_handler)
             .with_initialization_script(("window.__is_windows=".to_string()+is_windows+";var __electrico_nonce='"+config_params.id.clone().as_str()+"'; window.__electrico_preload=function(document, ph){\nph.before(__electrico_nonce); var window=document.window; var require=document.window.require;\n"+preload_script.as_str()+"\nph.after();\n};\n"+self.frontendalljs.as_str()+"\n__electrico_nonce='';\n").as_str())
