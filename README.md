@@ -44,7 +44,7 @@ To start Electrionico without dev tools, run
 ## Test with App 'Codex'
 As a more ambitious showcase I chose [Codex](https://codexnotes.com/) by Josh Vickery.
 
-Clone [Codex Github](https://codexnotes.com/) and give it a try.
+Clone [Codex Github](https://github.com/jcv8000/Codex) and give it a try.
 
 From the Codex repository folder start Codex in DEV mode:
 
