@@ -28,14 +28,14 @@
                 }
             }
 
-            let module_path = found_sp!=null?window.__electrico.module_paths[found_sp]:window.__create_protocol_url("fil://file");
+            let module_path = found_sp!=null?window.__electrico.module_paths[found_sp]:window.__create_protocol_url("fil://mod");
             //console.trace("load module", mpath, module_path, stack_path);
 
             let expanded_path = module_path;
             if (mpath.startsWith(".")) {
                 expanded_path+=mpath.substring(1, mpath.length);
             } else {
-                expanded_path=window.__create_protocol_url("fil://file/node_modules/"+mpath);
+                expanded_path=window.__create_protocol_url("fil://mod/node_modules/"+mpath);
             }
             
             let cached = fromCache(expanded_path);
@@ -50,7 +50,7 @@
                 req.open("GET", jsfilepath, false);
                 req.send();
             }
-            if (cached=="" || req.status==404) {
+            if (cached=="" || req.status==301) {
                 //console.trace("js file not found", expanded_path);
                 window.__electrico.module_cache[expanded_path]="";
                 let package_path = expanded_path+"/package.json";

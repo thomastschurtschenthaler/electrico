@@ -197,7 +197,7 @@ fn main() -> wry::Result<()> {
             
             respond_ok(responder);
           },
-          Command::BrowserWindowReadFile { browser_window_id, file_path } => {
+          Command::BrowserWindowReadFile { browser_window_id, file_path, module } => {
               trace!("BrowserWindowReadFile {} {}", browser_window_id, file_path);
               match frontend.get_client_path_base(&browser_window_id) {
                   Some(client_path_base) => {
@@ -207,7 +207,7 @@ fn main() -> wry::Result<()> {
                         respond_status(StatusCode::FORBIDDEN, CONTENT_TYPE_HTML.to_string(), "forbidden".to_string().into_bytes(), responder);
                         return;
                     }  
-                    handle_file_request(&tokio_runtime, file_path, file, &frontend_js_files, responder);
+                    handle_file_request(&tokio_runtime, module, file_path, file, &frontend_js_files, responder);
                   },
                   None => {
                       error!("browser client access to file forbidden - no client_path_base: {}", file_path);

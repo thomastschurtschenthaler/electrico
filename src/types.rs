@@ -20,7 +20,7 @@ pub enum Command {
   PostIPC {browser_window_id: String, request_id:String, params: String},
   SetIPCResponse {request_id:String, params: String},
   DOMContentLoaded {browser_window_id: String, title:String},
-  BrowserWindowReadFile {browser_window_id: String, file_path: String},
+  BrowserWindowReadFile {browser_window_id: String, file_path: String, module:bool},
   Node {invoke:NodeCommand},
   Electron {invoke:ElectronCommand},
 }

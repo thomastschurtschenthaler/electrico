@@ -39,7 +39,15 @@ pub fn build_file_map(dir:&Dir) -> HashMap<String, Vec<u8>> {
     res
 }
 
-pub fn handle_file_request(tokio_runtime:&Runtime, path:String, full_path:PathBuf, resources:&HashMap<String, Vec<u8>>, responder:RequestAsyncResponder)  {
+fn respond_not_found(module:bool, responder:RequestAsyncResponder) {
+    if module {
+        respond_status(StatusCode::MOVED_PERMANENTLY, CONTENT_TYPE_HTML.to_string(), "package".to_string().into_bytes(), responder);
+    } else {
+        respond_status(StatusCode::NOT_FOUND, CONTENT_TYPE_HTML.to_string(), "not found".to_string().into_bytes(), responder);
+    }
+}
+
+pub fn handle_file_request(tokio_runtime:&Runtime, module:bool, path:String, full_path:PathBuf, resources:&HashMap<String, Vec<u8>>, responder:RequestAsyncResponder)  {
     let resources_rt=resources.clone();
     tokio_runtime.spawn(
         async move {
@@ -56,14 +64,14 @@ pub fn handle_file_request(tokio_runtime:&Runtime, path:String, full_path:PathBu
                             },
                             Err(_e) => {
                                 trace!("file not found {}", full_path.to_str().unwrap());
-                                respond_status(StatusCode::NOT_FOUND, CONTENT_TYPE_HTML.to_string(), "not found".to_string().into_bytes(), responder);
+                                respond_not_found(module, responder);
                             }
                         }
                         
                     },
                     Err (_e) => {
                         trace!("file not found {}", full_path.as_os_str().to_str().unwrap());
-                        respond_status(StatusCode::NOT_FOUND, CONTENT_TYPE_HTML.to_string(), "not found".to_string().into_bytes(), responder);
+                        respond_not_found(module, responder);
                     }
                 }
             } else {
@@ -74,7 +82,7 @@ pub fn handle_file_request(tokio_runtime:&Runtime, path:String, full_path:PathBu
                         res.to_vec(), responder); 
                 } else {
                     trace!("file not found {}", path);
-                    respond_status(StatusCode::NOT_FOUND, CONTENT_TYPE_HTML.to_string(), "not found".to_string().into_bytes(), responder);
+                    respond_not_found(module, responder);
                 }
             }
         }
@@ -122,6 +130,14 @@ pub fn check_and_create_dir(dir:&Path) {
         info!("creating directory: {}", dir.as_os_str().to_str().unwrap());
         let _ = fs::create_dir_all(dir);
     }
+}
+pub fn is_module_request(host:Option<&str>) -> bool {
+    if let Some(host) = host {
+        if host=="mod" {
+            return true;
+        }
+    }
+    false
 }
         
 

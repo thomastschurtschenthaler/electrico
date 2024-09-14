@@ -6,7 +6,7 @@ use include_dir::{include_dir, Dir};
 use tao::{event_loop::{EventLoop, EventLoopProxy}, window::{Window, WindowBuilder}};
 use wry::{http::Request, RequestAsyncResponder, WebView, WebViewBuilder};
 use serde_json::Error;
-use crate::{common::{append_js_scripts, build_file_map, escape, handle_file_request}, ipcchannel::IPCMsg};
+use crate::{common::{append_js_scripts, build_file_map, escape, handle_file_request, is_module_request}, ipcchannel::IPCMsg};
 use crate::types::{Package, ElectricoEvents, Command};
 
 pub struct Backend {
@@ -59,7 +59,7 @@ impl Backend {
             
             let file = fil_src_dir.join(fpath.clone());
             trace!("trying load file {}", file.clone().as_mut_os_str().to_str().unwrap());
-            handle_file_request(&tokio_runtime, fpath, file, &backend_js_files, responder);
+            handle_file_request(&tokio_runtime, is_module_request(request.uri().host()), fpath, file, &backend_js_files, responder);
         };
         let mut is_windows="false";
         #[cfg(target_os = "windows")] {

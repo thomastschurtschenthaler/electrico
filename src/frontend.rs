@@ -6,7 +6,7 @@ use std::{collections::HashMap, fs, path::PathBuf};
 use tao::{dpi::{LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize}, event_loop::{EventLoopProxy, EventLoopWindowTarget}, window::{Icon, Window, WindowBuilder, WindowId}};
 use serde_json::Error;
 use wry::{http::Request, RequestAsyncResponder, WebView, WebViewBuilder};
-use crate::{common::{append_js_scripts, escape, respond_status, CONTENT_TYPE_TEXT, JS_DIR_FRONTEND}, electron::types::{BrowserWindowCreateParam, Rectangle, ShowMessageBoxOptions}, types::{Command, ElectricoEvents, FrontendCommand}};
+use crate::{common::{append_js_scripts, escape, is_module_request, respond_status, CONTENT_TYPE_TEXT, JS_DIR_FRONTEND}, electron::types::{BrowserWindowCreateParam, Rectangle, ShowMessageBoxOptions}, types::{Command, ElectricoEvents, FrontendCommand}};
 
 pub struct FrontendWindow {
     window:Window,
@@ -172,7 +172,11 @@ impl Frontend {
             }
             fpath = fpath.replace("..", "");
             trace!("frontend fil: fpath {}", fpath);
-            let _ = proxy.send_event(ElectricoEvents::ExecuteCommand {command:Command::BrowserWindowReadFile { browser_window_id:fil_handler_id.clone(), file_path: fpath}, responder});
+            let _ = proxy.send_event(ElectricoEvents::ExecuteCommand {command:Command::BrowserWindowReadFile {
+                browser_window_id:fil_handler_id.clone(), 
+                file_path: fpath, 
+                module:is_module_request(request.uri().host())
+            }, responder});
         };
 
         let mut is_windows="false";
