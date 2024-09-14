@@ -140,7 +140,9 @@ var __electrico_nonce=null;
                             console.log("child_process.on_close", e);
                         }
                     }
-                    delete window.__electrico.child_process[pid];
+                    setTimeout(()=>{
+                        delete window.__electrico.child_process[pid];
+                    }, 100);
                 }
             }
         },
