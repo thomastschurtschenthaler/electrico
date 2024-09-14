@@ -14,6 +14,11 @@ pub struct Package {
     pub name: String
 }
 
+pub enum BackendCommand {
+  ChildProcessCallback {pid:String, stream:String, data:String},
+  ChildProcessExit {pid:String, exit_code:Option<i32>}
+}
+
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(tag = "action")]
 pub enum Command {

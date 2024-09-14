@@ -253,9 +253,7 @@ impl Frontend {
     pub fn send_channel_message(&mut self, proxy: EventLoopProxy<ElectricoEvents>, id:String, channel:String, args:String) {
         if let Some(window) = self.windows.get(&id) {
             let _ = window.webview.evaluate_script_with_callback(format!("window.__electrico.sendChannelMessage('{}@{}');", &channel, escape(&args)).as_str(), move |r| {
-                if r.len()>0 {
-                    trace!("send_channel_message OK");
-                } else {
+                if r.len()==0 {
                     trace!("send_channel_message not OK - resending");
                     let _ = proxy.send_event(ElectricoEvents::SendChannelMessageRetry { browser_window_id: id.clone(), channel:channel.clone(), args:args.clone()});
                 }

@@ -1,4 +1,4 @@
-use std::{path::PathBuf, sync::mpsc::Sender};
+use std::{path::PathBuf, sync::mpsc::{self, Receiver, Sender}};
 use muda::MenuId;
 use substring::Substring;
 use log::{debug, error, trace};
@@ -6,16 +6,20 @@ use include_dir::{include_dir, Dir};
 use tao::{event_loop::{EventLoop, EventLoopProxy}, window::{Window, WindowBuilder}};
 use wry::{http::Request, RequestAsyncResponder, WebView, WebViewBuilder};
 use serde_json::Error;
-use crate::{common::{append_js_scripts, build_file_map, escape, handle_file_request, is_module_request}, ipcchannel::IPCMsg};
+use crate::{common::{append_js_scripts, build_file_map, escape, handle_file_request, is_module_request}, ipcchannel::IPCMsg, types::BackendCommand};
 use crate::types::{Package, ElectricoEvents, Command};
 
 pub struct Backend {
     _window:Window,
     webview:WebView,
+    retry_sender:Sender<BackendCommand>,
+    retry_receiver:Receiver<BackendCommand>
 }
 
 impl Backend {
     pub fn new(src_dir:PathBuf, package:&Package, event_loop:&EventLoop<ElectricoEvents>, proxy:EventLoopProxy<ElectricoEvents>) -> Backend {
+        let (retry_sender, retry_receiver): (Sender<BackendCommand>, Receiver<BackendCommand>) = mpsc::channel();
+
         let mut backendjs:String = String::new();
         const JS_DIR_SHARED: Dir = include_dir!("src/js/shared");
         backendjs = append_js_scripts(backendjs, JS_DIR_SHARED);
@@ -100,7 +104,9 @@ impl Backend {
         webview.open_devtools();
         Backend {
             _window:window,
-            webview:webview
+            webview:webview,
+            retry_sender,
+            retry_receiver
         }
     }
     pub fn command_callback(&mut self, command:String, message:String) {
@@ -136,18 +142,43 @@ impl Backend {
     pub fn dom_content_loaded(&mut self, id:&String) {
         let _ = self.webview.evaluate_script(format!("window.__electrico.domContentLoaded('{}');", id).as_str());
     }
-    pub fn child_process_callback(&mut self, pid:&String, stream:&String, data:&String) {
+    pub fn child_process_callback(&mut self, pid:String, stream:String, data:String) {
         trace!("child_process_callback {}", data);
-        let _ = self.webview.evaluate_script(&format!("window.__electrico.child_process.callback.on_{}('{}', '{}');", stream, pid, escape(data).as_str()));
+        let retry_sender = self.retry_sender.clone();
+        let _ = self.webview.evaluate_script_with_callback(&format!("window.__electrico.call(()=>{{window.__electrico.child_process.callback.on_{}('{}', '{}');}});", stream, pid, escape(&data).as_str()), move |r| {
+            if r.len()==0 {
+                trace!("child_process_callback not OK - resending");
+                let _ = retry_sender.send(BackendCommand::ChildProcessCallback { pid:pid.clone(), stream:stream.clone(), data:data.clone() });
+            }
+        });
     }
-    pub fn child_process_exit(&mut self, pid:&String, exit_code:&Option<i32>) {
+    pub fn child_process_exit(&mut self, pid:String, exit_code:Option<i32>) {
+        let call_script:String;
         if let Some(exit_code) = exit_code {
-            let _ = self.webview.evaluate_script(&format!("window.__electrico.child_process.callback.on_close('{}', {});", pid, exit_code.to_string()));
+            call_script=format!("window.__electrico.child_process.callback.on_close('{}', {});", pid, exit_code.to_string());
         } else {
-            let _ = self.webview.evaluate_script(&format!("window.__electrico.child_process.callback.on_close('{}');", pid));
+            call_script=format!("window.__electrico.child_process.callback.on_close('{}');", pid);
         }
+        let retry_sender = self.retry_sender.clone();
+        let _ = self.webview.evaluate_script_with_callback(&format!("window.__electrico.call(()=>{{{}}});", call_script.as_str()), move |r| {
+            if r.len()==0 {
+                trace!("child_process_exit not OK - resending");
+                let _ = retry_sender.send(BackendCommand::ChildProcessExit { pid: pid.clone(), exit_code: exit_code.clone() });
+            }
+        });
     }
-    pub fn get_window(&self) -> &Window {
-        &self._window
+    pub fn retry_commands(&mut self) {
+        if let Ok(command) = self.retry_receiver.try_recv() {
+            match command {
+                BackendCommand::ChildProcessCallback { pid, stream, data } => {
+                    trace!("retrying ChildProcessCallback");
+                    self.child_process_callback(pid, stream, data);
+                }
+                BackendCommand::ChildProcessExit { pid, exit_code } => {
+                    trace!("retrying ChildProcessExit");
+                    self.child_process_exit(pid, exit_code);
+                }
+            }
+        }
     }
 }

@@ -113,6 +113,10 @@ var __electrico_nonce=null;
         app_menu:{},
         module_paths: {},
         module_cache: {},
+        call: (f) => {
+            setTimeout(f, 0);
+            return "OK";
+        },
         child_process: {
             callback: {
                 on_stdout: (pid, data) => {

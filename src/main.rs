@@ -87,6 +87,7 @@ fn main() -> wry::Result<()> {
       }
       backend.menu_selected(event.id);
     }
+    backend.retry_commands();
     match event {
       Event::NewEvents(StartCause::Init) => {
         
@@ -243,7 +244,7 @@ fn main() -> wry::Result<()> {
       Event::UserEvent(ElectricoEvents::ChildProcessExit { pid, exit_code }) => {
         trace!("ChildProcessExit {}", pid);
         child_process.remove(&pid);
-        backend.child_process_exit(&pid, &exit_code);
+        backend.child_process_exit(pid, exit_code);
       }
       Event::UserEvent(ElectricoEvents::ChildProcessData {pid, stream, data }) => {
         if stream=="stdin" {
@@ -255,7 +256,7 @@ fn main() -> wry::Result<()> {
           match String::from_utf8(data) {
             Ok(data) => {
               trace!("ChildProcessData {} {}", stream, pid);
-              backend.child_process_callback(&pid, &stream, &data);
+              backend.child_process_callback(pid, stream, data);
             },
             Err(e) => {
               error!("ElectricoEvents::ChildProcessData utf error: {}", e);
