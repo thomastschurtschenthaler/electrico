@@ -78,7 +78,7 @@ pub fn process_electron_command(tokio_runtime:&Runtime, event_loop:&EventLoopWin
             }
         },
         ElectronCommand::BrowserWindowClose { id} => {
-            frontend.close(&id);
+            frontend.close(event_loop, &id);
             if frontend.count()==0 {
                 backend.window_all_closed();
             }

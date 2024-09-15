@@ -3,7 +3,7 @@ use include_dir::{include_dir, Dir};
 use reqwest::StatusCode;
 use substring::Substring;
 use std::{collections::HashMap, fs, path::PathBuf};
-use tao::{dpi::{LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize}, event_loop::{EventLoopProxy, EventLoopWindowTarget}, window::{Icon, Window, WindowBuilder, WindowId}};
+use tao::{dpi::{LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize}, event_loop::{EventLoopProxy, EventLoopWindowTarget}, platform::macos::{EventLoopWindowTargetExtMacOS, WindowExtMacOS}, rwh_06::AppKitWindowHandle, window::{Icon, Window, WindowBuilder, WindowId}};
 use serde_json::Error;
 use wry::{http::Request, RequestAsyncResponder, WebView, WebViewBuilder};
 use crate::{common::{append_js_scripts, escape, is_module_request, respond_status, CONTENT_TYPE_TEXT, JS_DIR_FRONTEND}, electron::types::{BrowserWindowCreateParam, Rectangle, ShowMessageBoxOptions}, types::{Command, ElectricoEvents, FrontendCommand}};
@@ -31,6 +31,7 @@ impl FrontendWindow {
 pub struct Frontend {
     window_ids:HashMap<WindowId, String>,
     windows:HashMap<String, FrontendWindow>,
+    opened_windows:usize,
     frontendalljs:String,
     rsrc_dir:PathBuf
 }
@@ -43,6 +44,7 @@ impl Frontend {
         Frontend {
             window_ids:HashMap::new(),
             windows:HashMap::new(),
+            opened_windows:0,
             frontendalljs:frontendalljs,
             rsrc_dir:rsrc_dir
         }
@@ -220,6 +222,7 @@ impl Frontend {
         self.window_ids.insert(window.id().clone(), config_params.id.clone());
         let fwindow: FrontendWindow = FrontendWindow::new(window, webview, w_id);
         self.windows.insert(config_params.id.clone(), fwindow);
+        self.opened_windows+=1;
     }
     pub fn load_url(&mut self, id:&String, fpath:String) {
         if let Some(window) = self.windows.get_mut(id) {
@@ -338,14 +341,27 @@ impl Frontend {
             win.window.set_minimized(minimized);
         }
     }
-    pub fn close(&mut self, id:&String) {
+    pub fn close(&mut self,  event_loop:&EventLoopWindowTarget<ElectricoEvents>, id:&String) {
         if let Some(win) = self.windows.get(id) {
-            self.window_ids.remove(&win.id);
-            self.windows.remove(id);
+            if self.window_ids.len()>1 {
+                self.window_ids.remove(&win.id);
+                self.windows.remove(id);
+            } else {
+                #[cfg(target_os = "macos")] {
+                    event_loop.hide_application();
+                }
+                #[cfg(not(target_os = "macos"))] {
+                    self.window_ids.remove(&win.id);
+                    self.windows.remove(id);
+                }
+            }
+            if self.opened_windows>0 {
+                self.opened_windows-=1;
+            }
         }
     }
     pub fn count(&mut self) -> usize {
-        self.window_ids.len()
+        self.opened_windows
     }
     pub fn set_focus(&mut self, id:&String) {
         if let Some(window) = self.windows.get(id) {
