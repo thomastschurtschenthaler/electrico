@@ -3,7 +3,7 @@ use include_dir::{include_dir, Dir};
 use reqwest::StatusCode;
 use substring::Substring;
 use std::{collections::HashMap, fs, path::PathBuf};
-use tao::{dpi::{LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize}, event_loop::{EventLoopProxy, EventLoopWindowTarget}, platform::macos::{EventLoopWindowTargetExtMacOS, WindowExtMacOS}, rwh_06::AppKitWindowHandle, window::{Icon, Window, WindowBuilder, WindowId}};
+use tao::{dpi::{LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize}, event_loop::{EventLoopProxy, EventLoopWindowTarget}, window::{Icon, Window, WindowBuilder, WindowId}};
 use serde_json::Error;
 use wry::{http::Request, RequestAsyncResponder, WebView, WebViewBuilder};
 use crate::{common::{append_js_scripts, escape, is_module_request, respond_status, CONTENT_TYPE_TEXT, JS_DIR_FRONTEND}, electron::types::{BrowserWindowCreateParam, Rectangle, ShowMessageBoxOptions}, types::{Command, ElectricoEvents, FrontendCommand}};
@@ -348,6 +348,7 @@ impl Frontend {
                 self.windows.remove(id);
             } else {
                 #[cfg(target_os = "macos")] {
+                    use tao::platform::macos::EventLoopWindowTargetExtMacOS;
                     event_loop.hide_application();
                 }
                 #[cfg(not(target_os = "macos"))] {
