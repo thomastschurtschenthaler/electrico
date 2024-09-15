@@ -25,7 +25,7 @@ As for now some basic Electron and Node APIs are - partly - implemented:
 -   common Electron App startup and BrowserWindow methods
 -   Electron IPC and preload.js
 -   parts of the Electron dialog API (OpenDialog, SaveDialog, MessageBox)
--   basic parts of NodeJS file system API (acces, fstat, mkdir, readfile, writefile)
+-   basic parts of NodeJS file system API (access, fstat, mkdir, readfile, writefile)
 -   parts of NodeJS process API (child_process spawn)
 
 ### Try out the Test App (Folder /Resources)
@@ -37,7 +37,7 @@ The Test App is configured to start up by default when Electrico is started from
 
 When Electrico is started in debug mode, it opens a browser dev tools window for the 'node backend' where debugging takes place. Also all GUI windows are shown with dev tools.
 
-To start Electrionico without dev tools, run
+To start Electrico without dev tools, run
 
 	cargo run --release
 
