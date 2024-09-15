@@ -14,7 +14,7 @@ It is written in **Rust** and **Javascript** on top of the cross-platform WebVie
 All Javascript code is executed within embedded system-native Web Views - one for the NodeJS 'backend', one for each Electron App-GUI browser window.
 The Electron and Node APIs are emulated with corresponding Rust API calls. All communcation between the Web Views and Rust runs on synchronous and asynchronous XMLHttpRequests.
 
-**Electronico comes lightweight - no need to bundle Node.js and Chromium binaries with the App executable!**
+**Electrico comes lightweight - no need to bundle Node.js and Chromium binaries with the App executable!**
 
 ### Features
 -   build size down to about 10MB
@@ -29,7 +29,7 @@ As for now some basic Electron and Node APIs are - partly - implemented:
 -   parts of NodeJS process API (child_process spawn)
 
 ### Try out the Test App (Folder /Resources)
-<img src="./screenshots/testapp.png" title="Electronico Test App" width="1000em" />
+<img src="./screenshots/testapp.png" title="Electrico Test App" width="1000em" />
 
 The Test App is configured to start up by default when Electrico is started from the project folder
 
@@ -51,7 +51,7 @@ From the Codex repository folder start Codex in DEV mode:
 	pnpm dev
 
 Codex starts up with Electron - you may close the Electron Window as we only need the DEV-Server running on port **5173**.
-Then point the link in **ResourceLink.json** to the Codex repository folder and start up Electronico:
+Then point the link in **ResourceLink.json** to the Codex repository folder and start up Electrico:
 
 	cargo run
 
