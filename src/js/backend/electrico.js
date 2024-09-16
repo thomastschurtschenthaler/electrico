@@ -165,18 +165,13 @@ var __electrico_nonce=null;
         channel:{},
         browser_window: {},
         loadMain: (main) => {
+            window.__import_meta = {url:""};
             window.__dirname = window.__electrico.appPath+(main.indexOf("/")>=0?("/"+main.substring(0, main.indexOf("/"))):"");
-            const req = new XMLHttpRequest();
-            req.open("GET", window.__create_protocol_url("fil://file/"+main), false);
-            req.send();
-            let script = "//# sourceURL="+main+"\n"+req.responseText;
-            script = window.__replaceImports(script);
+            if (!main.startsWith("./")) {
+                main = "./"+main;
+            }
             //setTimeout(()=>{
-                try {
-                    window.eval(script);
-                } catch (e) {
-                   console.error("error evaluating main script: ", main, e);
-                }
+                require(main);
             //}, 1000);
         },
         callIPCChannel: (argumentsstr) => {

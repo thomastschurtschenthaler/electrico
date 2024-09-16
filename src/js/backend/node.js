@@ -265,7 +265,14 @@
         util: util,
         events: EventEmitter,
         url: {
-
+            fileURLToPath: (file) => {
+                return file;
+            }
+        },
+        module: {
+            createRequire: (file) => {
+                return require;
+            }
         }
     };
     window.__electrico.libs["node:path"] = node.path;
@@ -288,4 +295,7 @@
     window.__electrico.libs.events = node.events;
     window.__electrico.libs["node:url"] = node.url;
     window.__electrico.libs.url = node.url;
+    window.__electrico.libs["node:module"] =node.module;
+    window.__electrico.libs.module = node.module;
+   
 })();

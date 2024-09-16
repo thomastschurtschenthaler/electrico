@@ -19,7 +19,7 @@
             }
             let found_sp=null;
             for (sp in window.__electrico.module_paths) {
-                if (stack_path.endsWith(sp)) {
+                if (stack_path.endsWith(sp) && stack_path!=sp) {
                     if (found_sp==null || sp.length>found_sp.length) {
                         found_sp=sp;
                     }
@@ -29,8 +29,6 @@
             }
 
             let module_path = found_sp!=null?window.__electrico.module_paths[found_sp]:window.__create_protocol_url("fil://mod");
-            //console.trace("load module", mpath, module_path, stack_path);
-
             let expanded_path = module_path;
             if (mpath.startsWith(".")) {
                 expanded_path+=mpath.substring(1, mpath.length);
@@ -45,7 +43,7 @@
             }
             let script=null; let req={};
             if (cached!="") {
-                let jsfilepath = expanded_path.endsWith(".js")?expanded_path:expanded_path+".js";
+                let jsfilepath = (expanded_path.lastIndexOf(".")<expanded_path.lastIndexOf("/"))?expanded_path+".js":expanded_path;
                 req = new XMLHttpRequest();
                 req.open("GET", jsfilepath, false);
                 req.send();
@@ -62,7 +60,7 @@
                     return null;
                 }
                 let package = JSON.parse(preq.responseText);
-                let mainjs = package.main!=null?package.main:(package.exports.default!=null?package.exports.default:package.exports);
+                let mainjs = package.main!=null?package.main:(package.exports!=null?(package.exports.default!=null?package.exports.default:package.exports):package.files[0]);
                 expanded_path = expanded_path+"/"+mainjs;
                 window.__electrico.module_paths[stack_path]=expanded_path.substring(0, expanded_path.lastIndexOf("/"));
 
@@ -110,9 +108,9 @@
             return loadModule(mpath, true);
         }
         window.__replaceImports = (script) => {
-            //return script.replaceAll(/\import *([^ ]*) *from *([^{ ,;,\r, \n}]*)/g, "var $1 = __import($2)");
-            let impr = script.replaceAll(/\import *((.*) +as +)?([^ ]*) *from *([^{ ,;,\r, \n}]*)/g, "var $3 = __import($4, '$2')");
-            return impr.replaceAll(/\export +(default)?([^ ]* +([^{ ,(,;,\n}]*))/g, "exports['$3']=$2");
+            let impr = script.replaceAll(/\import *((.*) +as +)?(.*) *from *([^{ ,;,\r, \n}]*)/g, "var $3 = __import($4, '$2')").replaceAll("import.meta", "__import_meta");
+            impr = impr.replaceAll(/\export +(default)?(const)?([^ ]* +([^{ ,(,;,\n}]*))/g, "exports['$4']=$3");
+            return impr;
         }
     };
 })();
