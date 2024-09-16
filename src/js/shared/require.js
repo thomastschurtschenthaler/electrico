@@ -10,11 +10,13 @@
                 return lib;
             }
             var module = {}; var exports = {};
-            let stack_path=null;
+            let stack_path="";
             try {__electrico_dummy_error} catch (e) {
-                stack_path="";
-                for (let s of e.stack.split("@")) {
-                    stack_path+=s.split(":")[0].replaceAll("\n", "");
+                let stack = e.stack.replaceAll("\n", "@").replaceAll("\r", "@").split("@");
+                for (let i =0 ; i<stack.length; i++) {
+                    if (i>0) {
+                        stack_path+=stack[i].split(":")[0];
+                    }
                 }
             }
             let found_sp=null;
