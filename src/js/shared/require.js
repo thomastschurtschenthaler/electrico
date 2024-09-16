@@ -55,7 +55,7 @@
                 const preq = new XMLHttpRequest();
                 preq.open("GET", package_path, false);
                 preq.send();
-                if (preq.status==404) {
+                if (preq.status==301) {
                     console.error("js file not found - no package.json", package_path);
                     return null;
                 }
