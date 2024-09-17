@@ -18,7 +18,7 @@ The Electron and Node APIs are emulated with corresponding Rust API calls. All c
 
 ### Features
 -   build size down to about 10MB
--   cross platform for linux, macos, linux, ios and android
+-   cross platform for linux, macos, windows, ios and android
 -   debugging frontend and backend with native browser dev-tools
 
 As for now some basic Electron and Node APIs are - partly - implemented:
