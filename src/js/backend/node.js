@@ -168,10 +168,12 @@
                     if (this.readyState == 4) {
                         if (req.status == 200) {
                             if (options==null || options.encoding==null) {
-                                return Buffer.from(req.response);
+                                cb(null, Buffer.from(req.response));
                             } else {
-                                cb(req.responseText);
+                                cb(null, req.responseText);
                             }
+                        } else {
+                            cb(req.responseText);
                         }
                     }
                 };
