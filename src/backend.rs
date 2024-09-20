@@ -3,7 +3,7 @@ use muda::MenuId;
 use substring::Substring;
 use log::{debug, error, trace};
 use include_dir::{include_dir, Dir};
-use tao::{event_loop::{EventLoop, EventLoopProxy}, window::{Window, WindowBuilder}};
+use tao::{dpi::PhysicalSize, event_loop::{EventLoop, EventLoopProxy}, window::{Window, WindowBuilder}};
 use wry::{http::Request, RequestAsyncResponder, WebView, WebViewBuilder};
 use serde_json::Error;
 use crate::{common::{append_js_scripts, build_file_map, escape, handle_file_request, is_module_request}, ipcchannel::IPCMsg, types::BackendCommand};
@@ -27,9 +27,23 @@ impl Backend {
         backendjs = append_js_scripts(backendjs, JS_DIR_BACKEND);
         let backend_js_files = build_file_map(&JS_DIR_BACKEND);
         let init_script = backendjs+"\nwindow.__electrico.loadMain('"+package.main.to_string().as_str()+"');";
-        let window = WindowBuilder::new()
-            .with_title("Electrico Node backend")
-            .with_visible(false)
+        
+        let mut window_builder = WindowBuilder::new()
+            .with_title("Electrico Node backend");
+
+        #[cfg(target_os = "macos")] {
+            #[cfg(debug_assertions)] {
+                window_builder = window_builder.with_inner_size(PhysicalSize::new(1,1));
+            }
+            #[cfg(not(debug_assertions))] {
+                window_builder = window_builder.with_visible(false);
+            }
+        }
+        #[cfg(not(target_os = "macos"))] {
+            window_builder = window_builder.with_visible(false);
+        }
+
+        let window = window_builder
             .build(event_loop)
             .unwrap();
         
