@@ -4,44 +4,23 @@
         function fromCache(expanded_path) {
             return window.__electrico.module_cache[expanded_path];
         }
-        function loadModule(mpath, cache) {
+        function loadModule(_this, mpath, cache) {
             let lib = window.__electrico.getLib(mpath, __electrico_nonce);
             if (lib!=null) {
                 return lib;
             }
             var module = {}; var exports = {};
-            let stack_path="";
-            try {__electrico_dummy_error} catch (e) {
-                let stack = e.stack.replaceAll("\n", "@").replaceAll("\r", "@").split("@");
-                for (let i =0 ; i<stack.length; i++) {
-                    if (i>0) {
-                        stack_path+=stack[i].split(":")[0];
-                    }
-                }
-            }
-            let found_sp=null;
-            for (sp in window.__electrico.module_paths) {
-                if (stack_path.endsWith(sp) && stack_path!=sp) {
-                    if (found_sp==null || sp.length>found_sp.length) {
-                        found_sp=sp;
-                    }
-                } else if (sp.endsWith(stack_path)) {
-                    delete window.__electrico.module_paths[sp];
-                }
-            }
-
-            let module_path = found_sp!=null?window.__electrico.module_paths[found_sp]:window.__create_protocol_url("fil://mod");
+            let module_path = _this!=null?_this.__import_mpath:window.__create_protocol_url("fil://mod");
             let expanded_path = module_path;
             if (mpath.startsWith(".")) {
-                expanded_path+=mpath.substring(1, mpath.length);
+                expanded_path+="/"+mpath;
             } else {
                 expanded_path=window.__create_protocol_url("fil://mod/node_modules/"+mpath);
             }
             
             let cached = fromCache(expanded_path);
             if (cached!=null && cached!="" && cache) {
-                window.__electrico.module_paths[stack_path]=expanded_path.substring(0, expanded_path.lastIndexOf("/"));
-                return cached;
+               return cached;
             }
             let script=null; let req={};
             if (cached!="") {
@@ -64,13 +43,11 @@
                 let package = JSON.parse(preq.responseText);
                 let mainjs = package.main!=null?package.main:(package.exports!=null?(package.exports.default!=null?package.exports.default:package.exports):package.files[0]);
                 expanded_path = expanded_path+"/"+mainjs;
-                window.__electrico.module_paths[stack_path]=expanded_path.substring(0, expanded_path.lastIndexOf("/"));
-
+                
                 if (!expanded_path.endsWith("js")) expanded_path+=".js";
                 if (cache) {
                     let cached = fromCache(expanded_path);
                     if (cached!=null) {
-                        window.__electrico.module_paths[stack_path]=expanded_path.substring(0, expanded_path.lastIndexOf("/"));
                         return cached;
                     }
                 }
@@ -85,18 +62,22 @@
             } else {
                 script=req.responseText;
             }
-            window.__electrico.module_paths[stack_path]=expanded_path.substring(0, expanded_path.lastIndexOf("/"));
-            script = "//# sourceURL="+expanded_path.substring(11, expanded_path.length) +"\n"+script;
-            eval(window.__replaceImports(script));
-            let exported = module.exports || exports;
+            let exported = null;
+            if (mpath.endsWith(".json")) {
+                exported = JSON.parse(script);
+            } else {
+                let _this = {"__import_mpath":expanded_path.substring(0, expanded_path.lastIndexOf("/"))};
+                eval("//# sourceURL="+expanded_path.substring(10, expanded_path.length) +"\n{\nlet __require_this=_this;"+window.__replaceImports(script)+"\n}");
+                exported = module.exports || exports;
+            }
             if (cache) {
                 window.__electrico.module_cache[expanded_path]=exported;
             }
             return exported;
         }
-        window.__import=function(mpath, selector) {
+        window.__Import=function(_this, mpath, selector) {
             //console.log("__import", mpath, selector);
-            let mod = loadModule(mpath, false);
+            let mod = loadModule(_this, mpath, false);
             if (selector!=null) {
                 //console.log("selector mod", mod);
                 /*let modsel = {};
@@ -106,12 +87,29 @@
             }
             return mod; 
         }
-        window.require=function(mpath) {
-            return loadModule(mpath, true);
+        window.__importinline=function(__require_this, mpath) {
+            return new Promise((resolve, reject) => {
+                let mod = loadModule(__require_this, mpath, false);
+                if (mod==null) {
+                    reject();
+                } else {
+                    resolve(mod);
+                }
+            });
+        }
+        window.require=function(__require_this, mpath) {
+            if (mpath==null) {
+                mpath = __require_this;
+                __require_this=null;
+            }
+            return loadModule(__require_this, mpath, true);
         }
         window.__replaceImports = (script) => {
-            let impr = script.replaceAll(/\import *((.*) +as +)?(.*) *from *([^{ ,;,\r, \n}]*)/g, "var $3 = __import($4, '$2')").replaceAll("import.meta", "__import_meta");
-            impr = impr.replaceAll(/\export +(default)?(const)?([^ ]* +([^{ ,(,;,\n}]*))/g, "exports['$4']=$3");
+            let impr = script.replaceAll(/\import *((.*) +as +)?(.*) *from *([^{ ,;,\r, \n}]*)/g, "var $3 = __Import(__require_this, $4, '$2')").replaceAll("import.meta", "__Import_meta");
+            impr = impr.replaceAll(/( |\n|\r)import *([^{ ,;,\r, \n}]*);/g, "__Import(__require_this, $2, '')");
+            impr = impr.replaceAll("import(", "__importinline(__require_this, ");
+            impr = impr.replaceAll("require(", "require(__require_this, ");
+            impr = impr.replaceAll(/\export +(default)?(const)?([^ ]* +([^{ ,(,;,\n}]*))/g, "exports['$4']=$3").replaceAll("'use strict'", "").replaceAll('"use strict"', "");
             return impr;
         }
     };
