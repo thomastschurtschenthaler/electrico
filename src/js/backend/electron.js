@@ -146,8 +146,27 @@
             this.commandLine = {
                 appendSwitch: (...args) => {
                     console.log("commandLine.appendSwitch", args);
+                },
+                getSwitchValue: (k) => {
+                    console.log("commandLine.getSwitchValue", k);
+                    return null;
                 }
             }
+            this.enableSandbox = () => {
+                console.log("app.enableSandbox");
+            }
+            this.setPath = (k, path) => {
+                console.log("commandLine.setPath", k, path);
+            }
+            this.getPreferredSystemLanguages = () => {
+                return ['en-US'];
+            }
+            this.getLocale = () => {
+                return 'en-US';
+            }
+            setTimeout(()=>{
+                this.emit("ready");
+            }, 0);
         }
         setName (name) {
             window.__electrico.app.name=name;
@@ -332,6 +351,17 @@
                 const req = createCMDRequest(true);
                 req.send(JSON.stringify(wrapInvoke({"command":"ShellOpenExternal", url:path})));
             }
+        },
+        protocol: {
+            registerSchemesAsPrivileged: (customSchemes) => {
+                console.log("registerSchemesAsPrivileged", customSchemes);
+            }
+        },
+        crashReporter: {
+
+        },
+        contentTracing: {
+
         }
     };
 

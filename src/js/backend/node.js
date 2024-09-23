@@ -261,7 +261,9 @@
             }
         },
         os: {
-
+            homedir: () => {
+                return window.__electrico.appPath;
+            }
         },
         querystring: queryString,
         util: util,
@@ -274,6 +276,9 @@
         module: {
             createRequire: (file) => {
                 return require;
+            },
+            register: (script, path) => {
+
             }
         }
     };

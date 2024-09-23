@@ -165,8 +165,8 @@ var __electrico_nonce=null;
         channel:{},
         browser_window: {},
         loadMain: (main) => {
-            window.__import_meta = {url:""};
             window.__dirname = window.__electrico.appPath+(main.indexOf("/")>=0?("/"+main.substring(0, main.indexOf("/"))):"");
+            window.__Import_meta = {url:window.__dirname};
             if (!main.startsWith("./")) {
                 main = "./"+main;
             }
@@ -256,6 +256,11 @@ var __electrico_nonce=null;
                     //console.log("process on", event, f);
                 }
             }
+            if (prop=="cwd") {
+                return () => {
+                    return window.__electrico.appPath;
+                }
+            }
             if (prop=="electronBinding") {
                 //console.log("electronBinding");
                 return (nodeversion) => {
@@ -270,11 +275,11 @@ var __electrico_nonce=null;
                     }
                 }
             }
-            
             if (_process==null) {
                 const req = createCMDRequest(false);
                 req.send(JSON.stringify({"action":"Node", invoke:{command:"GetProcessInfo"}}));
                 _process = JSON.parse(req.responseText);
+                
             }
             return _process[prop];
         }

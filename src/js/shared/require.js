@@ -4,27 +4,43 @@
         function fromCache(expanded_path) {
             return window.__electrico.module_cache[expanded_path];
         }
+        function normalize(path) {
+            let npath=[];
+            for (let p of path.split("/")) {
+                if (p==".") continue;
+                if (p==".." && npath.length>0) {
+                    npath.pop();
+                } else {
+                    npath.push(p);
+                }
+            }
+            let rpath = npath.join("/");
+            if (rpath.startsWith("/")) rpath = rpath.substring(1);
+            //console.log(path, rpath);
+            return rpath;
+        }
         function loadModule(_this, mpath, cache) {
             let lib = window.__electrico.getLib(mpath, __electrico_nonce);
             if (lib!=null) {
                 return lib;
             }
-            var module = {}; var exports = {};
-            let module_path = _this!=null?_this.__import_mpath:window.__create_protocol_url("fil://mod");
+            var module = {}; var exports = {__electrico_deferred:[]};
+            let module_path = _this!=null?_this.__import_mpath:"";
             let expanded_path = module_path;
             if (mpath.startsWith(".")) {
                 expanded_path+="/"+mpath;
             } else {
-                expanded_path=window.__create_protocol_url("fil://mod/node_modules/"+mpath);
+                expanded_path="node_modules/"+mpath;
             }
-            
+            expanded_path = normalize(expanded_path);
+
             let cached = fromCache(expanded_path);
             if (cached!=null && cached!="" && cache) {
                return cached;
             }
             let script=null; let req={};
             if (cached!="") {
-                let jsfilepath = (expanded_path.lastIndexOf(".")<expanded_path.lastIndexOf("/"))?expanded_path+".js":expanded_path;
+                let jsfilepath = window.__create_protocol_url("fil://mod/"+((expanded_path.lastIndexOf(".")<expanded_path.lastIndexOf("/"))?expanded_path+".js":expanded_path));
                 req = new XMLHttpRequest();
                 req.open("GET", jsfilepath, false);
                 req.send();
@@ -32,7 +48,7 @@
             if (cached=="" || req.status==301) {
                 //console.trace("js file not found", expanded_path);
                 window.__electrico.module_cache[expanded_path]="";
-                let package_path = expanded_path+"/package.json";
+                let package_path = window.__create_protocol_url("fil://mod/"+expanded_path+"/package.json");
                 const preq = new XMLHttpRequest();
                 preq.open("GET", package_path, false);
                 preq.send();
@@ -45,6 +61,7 @@
                 expanded_path = expanded_path+"/"+mainjs;
                 
                 if (!expanded_path.endsWith("js")) expanded_path+=".js";
+                expanded_path = normalize(expanded_path);
                 if (cache) {
                     let cached = fromCache(expanded_path);
                     if (cached!=null) {
@@ -52,10 +69,11 @@
                     }
                 }
                 const req2 = new XMLHttpRequest();
-                req2.open("GET", expanded_path, false);
+                let jsfilepath = window.__create_protocol_url("fil://mod/"+expanded_path);
+                req2.open("GET", jsfilepath, false);
                 req2.send();
                 if (req2.status==404) {
-                    console.error("js file not found", expanded_path);
+                    console.error("js file not found", jsfilepath);
                     return null;
                 }
                 script=req2.responseText;
@@ -67,7 +85,13 @@
                 exported = JSON.parse(script);
             } else {
                 let _this = {"__import_mpath":expanded_path.substring(0, expanded_path.lastIndexOf("/"))};
-                eval("//# sourceURL="+expanded_path.substring(10, expanded_path.length) +"\n{\nlet __require_this=_this;"+window.__replaceImports(script)+"\n}");
+                let sourceURL = "//# sourceURL="+expanded_path+"\n";
+                script = window.__replaceImports(script);
+                eval(sourceURL+"{\nlet __require_this=_this;"+script+"\n}");
+                for (let def of exports.__electrico_deferred) {
+                    def();
+                }
+                delete exports.__electrico_deferred;
                 exported = module.exports || exports;
             }
             if (cache) {
@@ -75,21 +99,45 @@
             }
             return exported;
         }
-        window.__Import=function(_this, mpath, selector) {
+        window.__Import=function(_this, selector, mpath, doExport, exports) {
             //console.log("__import", mpath, selector);
-            let mod = loadModule(_this, mpath, false);
+            let mod = loadModule(_this, mpath, true);
             if (selector!=null) {
-                //console.log("selector mod", mod);
-                /*let modsel = {};
-                if (selector=="*") {
-                    for (let k in mod)
-                }*/
+                selector = selector.trim();
+                let vlnames = false;
+                if (selector.startsWith("{") && selector.endsWith("}")) {
+                    vlnames = true;
+                    selector = selector.substring(1, selector.length-1);
+                }
+                let parts = selector.split(",");
+                for (let i=0; i<parts.length; i++) {
+                    let part = parts[i];
+                    let vparts = part.split(" as ");
+                    let vname = null; let vlname = null;
+                    if (vparts.length>1) {
+                        vlname =  vparts[0];
+                        vname = vparts[1];
+                    } else {
+                        vlname =  vparts[0];
+                        vname = vparts[0];
+                    }
+                    vlname=vlname.trim();
+                    vname=vname.trim();
+                    if (doExport) {
+                        vname = "exports['"+vname+"']";
+                    }
+                    if (vlnames) {
+                        eval(vname+"="+"mod['"+vlname+"'];");
+                    } else {
+                        eval(vname+"="+"mod;");
+                    }
+                }
             }
             return mod; 
         }
         window.__importinline=function(__require_this, mpath) {
             return new Promise((resolve, reject) => {
-                let mod = loadModule(__require_this, mpath, false);
+                let mod = loadModule(__require_this, mpath, true);
                 if (mod==null) {
                     reject();
                 } else {
@@ -105,12 +153,25 @@
             return loadModule(__require_this, mpath, true);
         }
         window.__replaceImports = (script) => {
-            let impr = script.replaceAll(/\import *((.*) +as +)?(.*) *from *([^{ ,;,\r, \n}]*)/g, "var $3 = __Import(__require_this, $4, '$2')").replaceAll("import.meta", "__Import_meta");
-            impr = impr.replaceAll(/( |\n|\r)import *([^{ ,;,\r, \n}]*);/g, "__Import(__require_this, $2, '')");
-            impr = impr.replaceAll("import(", "__importinline(__require_this, ");
-            impr = impr.replaceAll("require(", "require(__require_this, ");
-            impr = impr.replaceAll(/\export +(default)?(const)?([^ ]* +([^{ ,(,;,\n}]*))/g, "exports['$4']=$3").replaceAll("'use strict'", "").replaceAll('"use strict"', "");
-            return impr;
+            script = ("\n"+script+"\n").replaceAll(/[;,\r,\n]import (.*) from [',"](.*)[',"][;,\r,\n]/g, ";\n__Import(__require_this, '$1', '$2');\n");
+            script = script.replaceAll(/[;,\r,\n]import [',"](.*)[',"][;,\r,\n]/g, ";\n__Import(__require_this, null, '$1');\n");
+            script = script.replaceAll("import.meta", "__Import_meta");
+            script = script.replaceAll("import(", "__importinline(__require_this, ");
+            script = script.replaceAll("require(", "require(__require_this, ");
+            script = script.replaceAll(/[;,\r,\n]export (.*) from [',"](.*)[',"][;,\r,\n]/g, ";\n__Import(__require_this, '$1', '$2', true, exports);\n");
+            //script = script.replaceAll(/[;,\r,\n]export +(var ) *([^{ ,;,\n,\r}]+)[;,\r,\n]/g, "\nvar $2={}; exports['$2']=$2;\n");
+            //script = script.replaceAll(/\export +(default)?(const)? *( +([^{ ,;,\n}]*))(.*);/g, "try {exports['$4']=$4=$3$5;} catch (e) {setTimeout(()=>{exports['$4']=$4=$3$5;}, 0);};");
+            
+            let export_try_deferred = "var $3={}; try {exports['$3']=$3$4;} catch (e) {exports.__electrico_deferred.push(function(){exports['$3']=$3$4;});};";
+
+            script = script.replaceAll(/\export +(var ) *(([^{ ,;,\n}]*))(.*);/g, export_try_deferred);
+            script = script.replaceAll(/\export +(let ) *(([^{ ,;,\n}]*))(.*);/g, export_try_deferred);
+            script = script.replaceAll(/\export +(const ) *(([^{ ,;,\n}]*))(.*);/g, export_try_deferred);
+            script = script.replaceAll(/\export +(default )?(const )?(var )?(let )? *(([^{ ,;,\n}]*))(.*);/g, "exports['$6']=$6$7;");
+
+            script = script.replaceAll(/\export +(default)?(const)? *((async +function)?(function)?(function\*)?(class)? +([^{ ,(,;,\n}]*))/g, "exports['$8']=$8=$3");
+            script = script.replaceAll('"use strict"', "");
+            return script;
         }
     };
 })();
