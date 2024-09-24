@@ -132,6 +132,12 @@ impl Frontend {
                 Ok(ifile) => {
                     match Icon::from_rgba(ifile, 32, 32) {
                         Ok(icon) => {
+                            #[cfg(any(
+                                target_os = "windows",
+                                target_os = "macos",
+                                target_os = "ios",
+                                target_os = "android"
+                            ))]
                             window.set_window_icon(Some(icon));
                         },
                         Err(e) => {
