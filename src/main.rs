@@ -8,6 +8,7 @@ mod electron;
 use std::{collections::HashMap, fs, path::{Path, PathBuf}, str::FromStr, sync::mpsc::{self, Receiver, Sender}, time::{Duration, SystemTime}};
 use electron::electron::process_electron_command;
 use env_logger::Env;
+use json_comments::StripComments;
 use muda::{Menu, MenuEvent};
 use serde_json::Error;
 use backend::Backend;
@@ -37,12 +38,15 @@ fn main() -> wry::Result<()> {
     let rsrc_link_dir = rsrc_dir.join("ResourcesLink.json");
     let rsrc_link = Path::new(&rsrc_link_dir);
     if rsrc_link.exists() {
-      let res:Result<Resources, Error> = serde_json::from_str(fs::read_to_string(rsrc_link).unwrap().as_str());
-      if let Ok(res) = res {
-        if let Some(link) = res.link {
-          trace!("link {}", link);
-          rsrc_dir = PathBuf::from_str(link.as_str()).unwrap();
-          break;
+      if let Ok(rsrc_link_str) = fs::read_to_string(rsrc_link) {
+        let rsrc_link_json = StripComments::new(rsrc_link_str.as_bytes());
+        let res:Result<Resources, Error> = serde_json::from_reader(rsrc_link_json);
+        if let Ok(res) = res {
+          if let Some(link) = res.link {
+            trace!("link {}", link);
+            rsrc_dir = PathBuf::from_str(link.as_str()).unwrap();
+            break;
+          }
         }
       }
     }
