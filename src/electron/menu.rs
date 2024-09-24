@@ -147,7 +147,7 @@ pub fn create_menu(window:Option<&Window>, menu:Vec<AppMenu>, app_name:&Option<S
     if let Some(window) = window {
         #[cfg(target_os = "windows")] {
             use tao::platform::windows::WindowExtWindows;
-            main_menu.init_for_hwnd(window.hwnd() as _).unwrap();
+            unsafe {main_menu.init_for_hwnd(window.hwnd() as _).unwrap();}
         }
         #[cfg(target_os = "linux")] {
             use tao::platform::unix::WindowExtUnix;
