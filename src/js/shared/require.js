@@ -88,10 +88,12 @@
                 let sourceURL = "//# sourceURL="+expanded_path+"\n";
                 script = window.__replaceImports(script);
                 eval(sourceURL+"{\nlet __require_this=_this;"+script+"\n}");
-                for (let def of exports.__electrico_deferred) {
-                    def();
+                if (exports.__electrico_deferred!=null) {
+                    for (let def of exports.__electrico_deferred) {
+                        def();
+                    }
+                    delete exports.__electrico_deferred;
                 }
-                delete exports.__electrico_deferred;
                 exported = module.exports || exports;
             }
             if (cache) {
@@ -153,14 +155,12 @@
             return loadModule(__require_this, mpath, true);
         }
         window.__replaceImports = (script) => {
-            script = ("\n"+script+"\n").replaceAll(/[;,\r,\n]import (.*) from [',"](.*)[',"][;,\r,\n]/g, ";\n__Import(__require_this, '$1', '$2');\n");
-            script = script.replaceAll(/[;,\r,\n]import [',"](.*)[',"][;,\r,\n]/g, ";\n__Import(__require_this, null, '$1');\n");
+            script = ("\n"+script+"\n").replaceAll(/([;,\r,\n])import (.*) from [',"](.*)[',"][;,\r,\n]/g, "$1__Import(__require_this, '$2', '$3');");
+            script = script.replaceAll(/([;,\r,\n])import [',"](.*)[',"][;,\r,\n]/g, ";$1__Import(__require_this, null, '$2');");
             script = script.replaceAll("import.meta", "__Import_meta");
             script = script.replaceAll("import(", "__importinline(__require_this, ");
             script = script.replaceAll("require(", "require(__require_this, ");
-            script = script.replaceAll(/[;,\r,\n]export (.*) from [',"](.*)[',"][;,\r,\n]/g, ";\n__Import(__require_this, '$1', '$2', true, exports);\n");
-            //script = script.replaceAll(/[;,\r,\n]export +(var ) *([^{ ,;,\n,\r}]+)[;,\r,\n]/g, "\nvar $2={}; exports['$2']=$2;\n");
-            //script = script.replaceAll(/\export +(default)?(const)? *( +([^{ ,;,\n}]*))(.*);/g, "try {exports['$4']=$4=$3$5;} catch (e) {setTimeout(()=>{exports['$4']=$4=$3$5;}, 0);};");
+            script = script.replaceAll(/([;,\r,\n])export (.*) from [',"](.*)[',"][;,\r,\n]/g, ";$1__Import(__require_this, '$2', '$3', true, exports);");
             
             let export_try_deferred = "var $3={}; try {exports['$3']=$3$4;} catch (e) {exports.__electrico_deferred.push(function(){exports['$3']=$3$4;});};";
 
@@ -171,6 +171,17 @@
 
             script = script.replaceAll(/\export +(default)?(const)? *((async +function)?(function)?(function\*)?(class)? +([^{ ,(,;,\n}]*))/g, "exports['$8']=$8=$3");
             script = script.replaceAll('"use strict"', "");
+            let sourcemapspattern = "sourceMappingURL=data:application/json;base64,";
+            let smix = script.indexOf(sourcemapspattern);
+            if (smix>=0) {
+                try {
+                    let sourcemaps = JSON.parse(atob(script.substring(smix+sourcemapspattern.length)));
+                    if (sourcemaps.sourceRoot!=null && sourcemaps.sourceRoot.startsWith("file://")) {
+                        sourcemaps.sourceRoot = window.__create_protocol_url("fil://mod/"+sourcemaps.sourceRoot.substring(7));
+                        script = script.substring(0, smix+sourcemapspattern.length)+btoa(JSON.stringify(sourcemaps));
+                    }
+                } catch (e) {}
+            }
             return script;
         }
     };
