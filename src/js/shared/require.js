@@ -87,7 +87,13 @@
                 let _this = {"__import_mpath":expanded_path.substring(0, expanded_path.lastIndexOf("/"))};
                 let sourceURL = "//# sourceURL="+expanded_path+"\n";
                 script = window.__replaceImports(script);
-                eval(sourceURL+"{\nlet __require_this=_this;"+script+"\n}");
+                script = sourceURL+"{\nlet __require_this=_this;"+script+"\n}";
+                try {
+                    eval(script);
+                } catch (e) {
+                    console.log("require error", expanded_path, script, e);
+                    throw e;
+                }
                 if (exports.__electrico_deferred!=null) {
                     for (let def of exports.__electrico_deferred) {
                         def();
@@ -104,6 +110,7 @@
         window.__Import=function(_this, selector, mpath, doExport, exports) {
             //console.log("__import", mpath, selector);
             let mod = loadModule(_this, mpath, true);
+            let toEval="";
             if (selector!=null) {
                 selector = selector.trim();
                 let vlnames = false;
@@ -125,17 +132,21 @@
                     }
                     vlname=vlname.trim();
                     vname=vname.trim();
+                    if (vname.length==0) {
+                        console.warn("__Import vlname empty", mpath, selector)
+                        continue;
+                    }
                     if (doExport) {
                         vname = "exports['"+vname+"']";
                     }
                     if (vlnames) {
-                        eval(vname+"="+"mod['"+vlname+"'];");
+                        toEval+=((doExport?"":"var ")+vname+"="+"__electrico_import.mod['"+vlname+"'];");
                     } else {
-                        eval(vname+"="+"mod;");
+                        toEval+=((doExport?"":"var ")+vname+"="+"__electrico_import.mod;");
                     }
                 }
             }
-            return mod; 
+            return {mod:mod, toEval:toEval}; 
         }
         window.__importinline=function(__require_this, mpath) {
             return new Promise((resolve, reject) => {
@@ -155,13 +166,14 @@
             return loadModule(__require_this, mpath, true);
         }
         window.__replaceImports = (script) => {
-            script = ("\n"+script+"\n").replaceAll(/([;,\r,\n])import (.*) from [',"](.*)[',"][;,\r,\n]/g, "$1__Import(__require_this, '$2', '$3');");
-            script = script.replaceAll(/([;,\r,\n])import [',"](.*)[',"][;,\r,\n]/g, ";$1__Import(__require_this, null, '$2');");
+            script = ("\n"+script+"\n").replaceAll(/([;,\r,\n])import (.*) from [',"](.*)[',"][;,\r,\n]/g, "$1var __electrico_import=__Import(__require_this, '$2', '$3');eval(__electrico_import.toEval);");
+            script = script.replaceAll(/([;,\r,\n])import [',"](.*)[',"][;,\r,\n]/g, ";$1var __electrico_import=__Import(__require_this, null, '$2');eval(__electrico_import.toEval);");
             script = script.replaceAll("import.meta", "__Import_meta");
             script = script.replaceAll("import(", "__importinline(__require_this, ");
             script = script.replaceAll("require(", "require(__require_this, ");
-            script = script.replaceAll(/([;,\r,\n])export (.*) from [',"](.*)[',"][;,\r,\n]/g, ";$1__Import(__require_this, '$2', '$3', true, exports);");
+            script = script.replaceAll(/([;,\r,\n])export (.*) from [',"](.*)[',"][;,\r,\n]/g, ";$1var __electrico_import=__Import(__require_this, '$2', '$3', true, exports);eval(__electrico_import.toEval);");
             
+            script = script.replaceAll(/\export +{ *([^{ ,;,\n,}}]*) *} *;/g, "exports['$1']=$1;");
             let export_try_deferred = "var $3={}; try {exports['$3']=$3$4;} catch (e) {exports.__electrico_deferred.push(function(){exports['$3']=$3$4;});};";
 
             script = script.replaceAll(/\export +(var ) *(([^{ ,;,\n}]*))(.*);/g, export_try_deferred);
@@ -169,8 +181,10 @@
             script = script.replaceAll(/\export +(const ) *(([^{ ,;,\n}]*))(.*);/g, export_try_deferred);
             script = script.replaceAll(/\export +(default )?(const )?(var )?(let )? *(([^{ ,;,\n}]*))(.*);/g, "exports['$6']=$6$7;");
 
-            script = script.replaceAll(/\export +(default)?(const)? *((async +function)?(function)?(function\*)?(class)? +([^{ ,(,;,\n}]*))/g, "exports['$8']=$8=$3");
+            script = script.replaceAll(/\export +(default)?(const)? *((async +function)?(function)?(function\*)?(async +function\*)?(class)? +([^{ ,(,;,\n}]*))/g, "exports['$9']=$9=$3");
             script = script.replaceAll('"use strict"', "");
+            script = script.replaceAll(/[\r,\n] *}[\r,\n] *\(function/g, "\n};\n(function"); // Color
+
             let sourcemapspattern = "sourceMappingURL=data:application/json;base64,";
             let smix = script.indexOf(sourcemapspattern);
             if (smix>=0) {
