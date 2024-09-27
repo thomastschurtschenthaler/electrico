@@ -72,7 +72,6 @@ fn main() -> wry::Result<()> {
   let mut backend = Backend::new(rsrc_dir.clone(), &package, &event_loop, proxy.clone());
   let mut frontend = Frontend::new(rsrc_dir.clone());
   let mut ipc_channel = IPCChannel::new();
-  let mut child_process:HashMap<String, Sender<Vec<u8>>> = HashMap::new();
   
   let menu_channel = MenuEvent::receiver();
   
@@ -91,7 +90,7 @@ fn main() -> wry::Result<()> {
       }
       backend.menu_selected(event.id);
     }
-    backend.retry_commands();
+    backend.process_commands();
     match event {
       Event::NewEvents(StartCause::Init) => {
         
@@ -233,40 +232,13 @@ fn main() -> wry::Result<()> {
             }
           }
           Command::Node { invoke } => {
-            process_node_command(&tokio_runtime, &app_env, proxy.clone(),  invoke, responder);
+            process_node_command(&tokio_runtime, &app_env, backend.command_sender(), invoke, responder);
           }
         }
       },
       Event::UserEvent(ElectricoEvents::SendChannelMessageRetry { browser_window_id, channel, args }) => {
         trace!("SendChannelMessageRetry");
         frontend.send_channel_message(proxy.clone(), browser_window_id, channel, args);
-      },
-      Event::UserEvent(ElectricoEvents::ChildProcessStart { pid, sender }) => {
-        trace!("ChildProcessStart {}", pid);
-        child_process.insert(pid, sender);
-      },
-      Event::UserEvent(ElectricoEvents::ChildProcessExit { pid, exit_code }) => {
-        trace!("ChildProcessExit {}", pid);
-        child_process.remove(&pid);
-        backend.child_process_exit(pid, exit_code);
-      }
-      Event::UserEvent(ElectricoEvents::ChildProcessData {pid, stream, data }) => {
-        if stream=="stdin" {
-          if let Some(sender) = child_process.get(&pid) {
-            trace!("ChildProcessData stdin {}", pid);
-            let _ = sender.send(data);
-          }
-        } else {
-          match String::from_utf8(data) {
-            Ok(data) => {
-              trace!("ChildProcessData {} {}", stream, pid);
-              backend.child_process_callback(pid, stream, data);
-            },
-            Err(e) => {
-              error!("ElectricoEvents::ChildProcessData utf error: {}", e);
-            }
-          }
-        }
       },
       Event::UserEvent(ElectricoEvents::Exit) => {
         *control_flow = ControlFlow::Exit;

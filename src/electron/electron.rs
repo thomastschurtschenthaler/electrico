@@ -118,7 +118,9 @@ pub fn process_electron_command(tokio_runtime:&Runtime, event_loop:&EventLoopWin
             respond_ok(responder);
         },
         ElectronCommand::SetApplicationMenu { menu } => {
-            menu_ret = Some(create_menu(frontend.get_actual_window(), menu, &app_env.app_name));
+            if let Some(menu) = menu {
+                menu_ret = Some(create_menu(frontend.get_actual_window(), menu, &app_env.app_name));
+            }
             respond_ok(responder);
         },
         ElectronCommand::GetAppPath { path } => {
@@ -151,6 +153,13 @@ pub fn process_electron_command(tokio_runtime:&Runtime, event_loop:&EventLoopWin
                     if let Some(proj_dirs) = directories::ProjectDirs::from("", "", package.name.as_str()) {
                         let dir = proj_dirs.config_dir().as_os_str().to_str().unwrap().to_string();
                         check_and_create_dir(Path::new(&dir));
+                        respond_status(StatusCode::OK, CONTENT_TYPE_TEXT.to_string(), dir.into_bytes(), responder);
+                    } else {
+                        respond_404(responder);
+                    }
+                } else if path=="userHome" {
+                    if let Some(user_dirs) = directories::UserDirs::new() {
+                        let dir = user_dirs.home_dir().as_os_str().to_str().unwrap().to_string();
                         respond_status(StatusCode::OK, CONTENT_TYPE_TEXT.to_string(), dir.into_bytes(), responder);
                     } else {
                         respond_404(responder);

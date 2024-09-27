@@ -15,11 +15,7 @@
             req.send(JSON.stringify({"action":"PostIPC", "request_id":request_id, "nonce": nonce, "params":JSON.stringify(args)}));
             return req;
         }
-        function uuidv4() {
-            return "10000000-1000-4000-8000-100000000000".replace(/[018]/g, c =>
-                (+c ^ window.crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> +c / 4).toString(16)
-            );
-        }
+        let uuidv4 = window.__uuidv4;
         function processi(nonce) {
             let _processInfo=null;
             return new Proxy({}, {

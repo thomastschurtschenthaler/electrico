@@ -50,6 +50,8 @@ pub enum NodeCommand {
   FSMkdir {path:String, options:Option<FSOptions>},
   FSReadFile {path:String, options:Option<FSOptions>},
   FSWriteFile {path:String, data:String, options:Option<FSOptions>},
+  FSWatch {path:String, wid:String, options:Option<FSOptions>},
+  FSWatchClose {wid:String},
   HTTPRequest {options:HTTPOptions},
   ChildProcessSpawn {cmd: String, args:Option<Vec<String>>},
   ChildProcessStdinWrite {pid: String, data:String}

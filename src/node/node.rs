@@ -1,12 +1,12 @@
-use std::{fs, io::{Read, Write}, path::Path, process::{Child, Command, Stdio}, sync::mpsc::{self, Receiver, Sender}, time::Duration};
+use std::{fs, io::{Read, Write}, path::Path, process::{Command, Stdio}, sync::mpsc::{self, channel, Receiver, Sender}};
 use base64::prelude::*;
 use log::{debug, error, info, trace, warn};
+use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
 use reqwest::{header::{ACCESS_CONTROL_ALLOW_ORIGIN, CONTENT_TYPE}, Method, Request, StatusCode, Url};
-use tao::event_loop::EventLoopProxy;
-use tokio::{runtime::Runtime, time::sleep};
+use tokio::runtime::Runtime;
 use wry::{http::Response, webview_version, RequestAsyncResponder};
 
-use crate::{backend, common::{respond_404, respond_client_error, respond_ok, respond_status, CONTENT_TYPE_JSON, CONTENT_TYPE_TEXT}, node::types::{Process, ProcessEnv, ProcessVersions}, types::{ElectricoEvents, Package}};
+use crate::{common::{respond_404, respond_client_error, respond_ok, respond_status, CONTENT_TYPE_JSON, CONTENT_TYPE_TEXT}, node::types::{Process, ProcessEnv, ProcessVersions}, types::BackendCommand};
 use super::types::{ConsoleLogLevel, FSStat, NodeCommand};
 
 pub struct AppEnv {
@@ -32,7 +32,10 @@ impl AppEnv {
     }
 }
 
-pub fn process_node_command(tokio_runtime:&Runtime, app_env:&AppEnv, proxy:EventLoopProxy<ElectricoEvents>, command:NodeCommand,responder:RequestAsyncResponder)  {
+pub fn process_node_command(tokio_runtime:&Runtime, app_env:&AppEnv,
+        command_sender:Sender<BackendCommand>,
+        command:NodeCommand,
+        responder:RequestAsyncResponder)  {
     match command {
         NodeCommand::ConsoleLog { params } => {
             match params.level {
@@ -291,7 +294,7 @@ pub fn process_node_command(tokio_runtime:&Runtime, app_env:&AppEnv, proxy:Event
                 .args(pargs).spawn() {
                 Ok(mut child) => {
                     let (sender, receiver): (Sender<Vec<u8>>, Receiver<Vec<u8>>) = mpsc::channel();
-                    let _ = proxy.send_event(ElectricoEvents::ChildProcessStart { pid: child.id().to_string(), sender: sender });
+                    let _ = command_sender.send(BackendCommand::ChildProcessStart { pid: child.id().to_string(), sender: sender });
                     respond_status(StatusCode::OK, CONTENT_TYPE_TEXT.to_string(), child.id().to_string().into_bytes(), responder); 
                     tokio_runtime.spawn(
                         async move {
@@ -304,7 +307,7 @@ pub fn process_node_command(tokio_runtime:&Runtime, app_env:&AppEnv, proxy:Event
                                 }, 
                                 None => {
                                     error!("ChildProcessSpawn stdout not available");
-                                    let _ = proxy.send_event(ElectricoEvents::ChildProcessExit {pid:child.id().to_string(), exit_code:None});
+                                    let _ = command_sender.send(BackendCommand::ChildProcessExit {pid:child.id().to_string(), exit_code:None});
                                     return;
                                 }
                             }
@@ -314,7 +317,7 @@ pub fn process_node_command(tokio_runtime:&Runtime, app_env:&AppEnv, proxy:Event
                                 }, 
                                 None => {
                                     error!("ChildProcessSpawn stderr not available");
-                                    let _ = proxy.send_event(ElectricoEvents::ChildProcessExit {pid:child.id().to_string(), exit_code:None});
+                                    let _ = command_sender.send(BackendCommand::ChildProcessExit {pid:child.id().to_string(), exit_code:None});
                                     return;
                                 }
                             }
@@ -324,7 +327,7 @@ pub fn process_node_command(tokio_runtime:&Runtime, app_env:&AppEnv, proxy:Event
                                 }, 
                                 None => {
                                     error!("ChildProcessSpawn stdid not available");
-                                    let _ = proxy.send_event(ElectricoEvents::ChildProcessExit {pid:child.id().to_string(), exit_code:None});
+                                    let _ = command_sender.send(BackendCommand::ChildProcessExit {pid:child.id().to_string(), exit_code:None});
                                     return;
                                 }
                             }
@@ -342,7 +345,7 @@ pub fn process_node_command(tokio_runtime:&Runtime, app_env:&AppEnv, proxy:Event
                                     stdinread = read;
                                     if read>0 {
                                         let data:Vec<u8> = stdout_buf[0..read].to_vec();
-                                        let _ = proxy.send_event(ElectricoEvents::ChildProcessData {pid: child.id().to_string(), stream: "stdout".to_string(), data:data});
+                                        let _ = command_sender.send(BackendCommand::ChildProcessCallback { pid:child.id().to_string(), stream:"stdout".to_string(), data:data });
                                     }
                                 }
                                 let stderr_buf:&mut [u8] = &mut [0; 1024];
@@ -351,7 +354,7 @@ pub fn process_node_command(tokio_runtime:&Runtime, app_env:&AppEnv, proxy:Event
                                     stderrread = read;
                                     if read>0 {
                                         let data:Vec<u8> = Vec::from(stderr_buf);
-                                        let _ = proxy.send_event(ElectricoEvents::ChildProcessData {pid: child.id().to_string(), stream: "stderr".to_string(), data:data});
+                                        let _ = command_sender.send(BackendCommand::ChildProcessCallback { pid:child.id().to_string(), stream:"stderr".to_string(), data:data });
                                     }
                                 }
                                 match child.try_wait() {
@@ -371,7 +374,7 @@ pub fn process_node_command(tokio_runtime:&Runtime, app_env:&AppEnv, proxy:Event
                                     }
                                 }
                             }
-                            let _ = proxy.send_event(ElectricoEvents::ChildProcessExit {pid:child.id().to_string(), exit_code:exit_code});
+                            let _ = command_sender.send(BackendCommand::ChildProcessExit {pid:child.id().to_string(), exit_code:exit_code});
                         }
                     );         
                 },
@@ -381,7 +384,46 @@ pub fn process_node_command(tokio_runtime:&Runtime, app_env:&AppEnv, proxy:Event
             }
         },
         NodeCommand::ChildProcessStdinWrite { pid, data } => {
-            let _ = proxy.send_event(ElectricoEvents::ChildProcessData {pid: pid, stream: "stdin".to_string(), data:data.into_bytes()});
+            let _ = command_sender.send(BackendCommand::ChildProcessCallback { pid:pid, stream:"stdin".to_string(), data:data.into_bytes() });
+            respond_ok(responder);
+        },
+        NodeCommand::FSWatch { path, wid, options } => {
+            tokio_runtime.spawn(
+                async move {
+                    let (tx, rx): (Sender<Result<Event, notify::Error>>, Receiver<Result<Event, notify::Error>>) = channel();
+                    match RecommendedWatcher::new(
+                        move |res| {
+                            let _ = tx.send(res);
+                        },
+                        Config::default()
+                    ) {
+                        Ok(mut watcher) => {
+                            respond_ok(responder);
+                            let _ = watcher.watch(path.as_ref(), RecursiveMode::Recursive);
+                            let (sender, receiver): (Sender<bool>, Receiver<bool>) = mpsc::channel();
+                            let _ = command_sender.send(BackendCommand::FSWatchStart { wid: wid.clone(), sender: sender });
+                            loop {
+                                if let Ok(res) = rx.try_recv() {
+                                    if let Ok(event) = res {
+                                        trace!("fswatch receive event {:?}", event);
+                                        let _ = command_sender.send(BackendCommand::FSWatchEvent { wid: wid.clone(), event: event });
+                                    }
+                                }
+                                if let Ok(_stop) = receiver.try_recv() {
+                                    trace!("fswatch receive stop");
+                                    break;
+                                }
+                            }
+                        },
+                        Err(e) => {
+                            respond_status(StatusCode::INTERNAL_SERVER_ERROR, CONTENT_TYPE_TEXT.to_string(), format!("Error: {}", e).to_string().into_bytes(), responder); 
+                        }
+                    }
+                }
+            );
+        },
+        NodeCommand::FSWatchClose { wid } => {
+            let _ = command_sender.send(BackendCommand::FSWatchStop { wid });
             respond_ok(responder);
         }
     }

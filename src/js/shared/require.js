@@ -89,6 +89,9 @@
                 script = window.__replaceImports(script);
                 script = sourceURL+"{\nlet __require_this=_this;"+script+"\n}";
                 try {
+                    /*if (expanded_path.endsWith("platform/product/common/productService.js")) {
+                        console.log("found!");
+                    }*/
                     eval(script);
                 } catch (e) {
                     console.log("require error", expanded_path, script, e);
@@ -127,8 +130,16 @@
                         vlname =  vparts[0];
                         vname = vparts[1];
                     } else {
-                        vlname =  vparts[0];
                         vname = vparts[0];
+                        vlname = vparts[0];
+                        if (!vlnames && parts.length==1) {
+                            if (mod==null) {
+                                console.warn("mod null:", mpath);
+                            } else if (Object.keys(mod).length==1) {
+                                vlname =  Object.keys(mod)[0];
+                                vlnames = true;
+                            }
+                        }
                     }
                     vlname=vlname.trim();
                     vname=vname.trim();

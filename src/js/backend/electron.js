@@ -1,11 +1,7 @@
 (function () {
     let EventEmitter = require('eventemitter3');
     window.__electrico = window.__electrico || {libs:{}};
-    function uuidv4() {
-        return "10000000-1000-4000-8000-100000000000".replace(/[018]/g, c =>
-            (+c ^ window.crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> +c / 4).toString(16)
-        );
-    }
+    let uuidv4 = window.__uuidv4;
     function wrapInvoke(invoke) {
         return {"action":"Electron", invoke:invoke};
     }
@@ -214,6 +210,16 @@
             defaultSession: {
                 webRequest: {
                     onHeadersReceived: (handler) => {
+                        //TODO not implemented
+                    }
+                },
+                protocol: {
+                    interceptFileProtocol: (schema, handler) => {
+                        console.log("interceptFileProtocol", schema);
+                        //TODO not implemented
+                    },
+                    registerFileProtocol: (schema, handler) => {
+                        console.log("registerFileProtocol", schema);
                         //TODO not implemented
                     }
                 }

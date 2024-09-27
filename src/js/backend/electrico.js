@@ -146,6 +146,14 @@ var __electrico_nonce=null;
                 }
             }
         },
+        fs_watcher: {
+            on_event: (wid, eventType, filenames) => {
+                let files = filenames.split(";");
+                for (let file of files) {
+                    window.__electrico.fs_watcher[wid].on_event(eventType, file);
+                }
+            }
+        },
         app: {},
         libs: window.__electrico!=null?window.__electrico.libs:{},
         getLib: (mpath, nonce) => {
@@ -235,8 +243,8 @@ var __electrico_nonce=null;
         }
     };
     let _process = null;
-    
-    var process=new Proxy({}, {
+    let EventEmitter = require('eventemitter3');
+    var process=new Proxy(new EventEmitter(), {
         get(target, prop, receiver) {
             if (prop=="stdout") {
                 return {
@@ -250,11 +258,6 @@ var __electrico_nonce=null;
                 const req = createCMDRequest(false);
                 req.send(JSON.stringify({"action":"Node", invoke:{command:"GetStartArgs"}}));
                 return JSON.parse(req.responseText);
-            }
-            if (prop=="on") {
-                return (event, f) => {
-                    //console.log("process on", event, f);
-                }
             }
             if (prop=="cwd") {
                 return () => {
@@ -279,9 +282,11 @@ var __electrico_nonce=null;
                 const req = createCMDRequest(false);
                 req.send(JSON.stringify({"action":"Node", invoke:{command:"GetProcessInfo"}}));
                 _process = JSON.parse(req.responseText);
-                
+                for (let k in _process) {
+                    target[k] = _process[k];
+                }
             }
-            return _process[prop];
+            return target[prop];
         }
     });
     window.process=process;

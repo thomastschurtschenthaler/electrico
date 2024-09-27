@@ -159,7 +159,7 @@ pub enum ElectronCommand {
     AppSetName {name: String},
     GetAppPath {path: Option<String>},
     GetAppVersion,
-    SetApplicationMenu {menu:Vec<AppMenu>},
+    SetApplicationMenu {menu:Option<Vec<AppMenu>>},
     ShowOpenDialogSync {options:FileDialogOptions},
     ShowOpenDialog {window_id:Option<String>, options:FileDialogOptions},
     ShowSaveDialogSync {options:FileDialogOptions},

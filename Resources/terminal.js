@@ -9,6 +9,12 @@ let html = `<h2>Send Shell Command</h2>
                 <button id="send">Send</button>
             </div>
             <div>
+                <label for="cmd">Watch File Path:</label>
+                <input type="text" class="path" id="path" value="/Users/thomastschurtschenthaler/Documents/workspaces/electrico">
+                <button id="startwatch">Start</button>
+                <button id="stopwatch">Stop</button>
+            </div>
+            <div>
                 <label for="output">Output:</label>
                 <div class="output" id="output"></div>
             </div>`;
@@ -19,6 +25,13 @@ document.getElementById("send").onclick = (e) => {
     let stdin = document.getElementById("stdin").value.trim();
     args = args=args!=""?args.split(" "):null;
     callshell({cmd:cmd, args:args, stdin:stdin});
+};
+document.getElementById("startwatch").onclick = (e) => {
+    let path = document.getElementById("path").value.trim();
+    startwatch(path);
+};
+document.getElementById("stopwatch").onclick = (e) => {
+    stopwatch();
 };
 window.onWriteOutput((event, text, level) => {
     text = text.replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll("\r\n", "<br>").replaceAll("\n", "<br>").replaceAll("\r", "<br>");

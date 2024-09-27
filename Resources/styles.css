@@ -5,10 +5,12 @@
     height: 30rem;
     overflow: auto;
 }
-
 .info {
     color:greenyellow;
 }
 .error {
     color:lightsalmon;
+}
+.path {
+    width: 30rem;
 }

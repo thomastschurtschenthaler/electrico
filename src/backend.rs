@@ -1,5 +1,6 @@
-use std::{path::PathBuf, sync::mpsc::{self, Receiver, Sender}};
+use std::{collections::HashMap, path::PathBuf, sync::mpsc::{self, Receiver, Sender}};
 use muda::MenuId;
+use notify::Event;
 use substring::Substring;
 use log::{debug, error, trace};
 use include_dir::{include_dir, Dir};
@@ -12,13 +13,15 @@ use crate::types::{Package, ElectricoEvents, Command};
 pub struct Backend {
     _window:Window,
     webview:WebView,
-    retry_sender:Sender<BackendCommand>,
-    retry_receiver:Receiver<BackendCommand>
+    command_sender:Sender<BackendCommand>,
+    command_receiver:Receiver<BackendCommand>,
+    child_process:HashMap<String, Sender<Vec<u8>>>,
+    fs_watcher:HashMap<String, Sender<bool>>
 }
 
 impl Backend {
     pub fn new(src_dir:PathBuf, package:&Package, event_loop:&EventLoop<ElectricoEvents>, proxy:EventLoopProxy<ElectricoEvents>) -> Backend {
-        let (retry_sender, retry_receiver): (Sender<BackendCommand>, Receiver<BackendCommand>) = mpsc::channel();
+        let (command_sender, command_receiver): (Sender<BackendCommand>, Receiver<BackendCommand>) = mpsc::channel();
 
         let mut backendjs:String = String::new();
         const JS_DIR_SHARED: Dir = include_dir!("src/js/shared");
@@ -71,11 +74,11 @@ impl Backend {
         let tokio_runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(5).enable_io().enable_time().build().unwrap();
         
         let fil_handler = move |request: Request<Vec<u8>>, responder:RequestAsyncResponder| {
-            let fil_src_dir = src_dir.clone();
-            trace!("backend fil: request {}", request.uri().path().to_string());
-            let fpath = request.uri().path().to_string().as_str().substring(1, request.uri().path().to_string().as_str().len()).to_string();
+            let rpath = request.uri().path().to_string();
+            trace!("backend fil: request {}", rpath);
+            let fpath = rpath.substring(1, rpath.len()).to_string();
             
-            let file = fil_src_dir.join(fpath.clone());
+            let file = src_dir.join(fpath.clone());
             trace!("trying load file {}", file.clone().as_mut_os_str().to_str().unwrap());
             handle_file_request(&tokio_runtime, is_module_request(request.uri().host()), fpath, file, &backend_js_files, responder);
         };
@@ -106,7 +109,7 @@ impl Backend {
         };
 
         let webview = builder
-            .with_html("<h1>Electrico Node Backend</h1>")
+            .with_url("fil://file/backend.html")
             .with_asynchronous_custom_protocol("fil".into(), fil_handler)
             .with_asynchronous_custom_protocol("cmd".into(), cmd_handler)
             .with_devtools(true)
@@ -119,8 +122,10 @@ impl Backend {
         Backend {
             _window:window,
             webview:webview,
-            retry_sender,
-            retry_receiver
+            command_sender,
+            command_receiver,
+            child_process: HashMap::new(),
+            fs_watcher: HashMap::new()
         }
     }
     pub fn command_callback(&mut self, command:String, message:String) {
@@ -156,15 +161,29 @@ impl Backend {
     pub fn dom_content_loaded(&mut self, id:&String) {
         let _ = self.webview.evaluate_script(format!("window.__electrico.domContentLoaded('{}');", id).as_str());
     }
-    pub fn child_process_callback(&mut self, pid:String, stream:String, data:String) {
-        trace!("child_process_callback {}", data);
-        let retry_sender = self.retry_sender.clone();
-        let _ = self.webview.evaluate_script_with_callback(&format!("window.__electrico.call(()=>{{window.__electrico.child_process.callback.on_{}('{}', '{}');}});", stream, pid, escape(&data).as_str()), move |r| {
-            if r.len()==0 {
-                trace!("child_process_callback not OK - resending");
-                let _ = retry_sender.send(BackendCommand::ChildProcessCallback { pid:pid.clone(), stream:stream.clone(), data:data.clone() });
+    pub fn child_process_callback(&mut self, pid:String, stream:String, data:Vec<u8>) {
+        if stream=="stdin" {
+            if let Some(sender) = self.child_process.get(&pid) {
+              trace!("ChildProcessData stdin {}", pid);
+              let _ = sender.send(data);
             }
-        });
+        } else {
+            match String::from_utf8(data) {
+                Ok(data) => {
+                    trace!("child_process_callback {} {}", stream, pid);
+                    let retry_sender = self.command_sender.clone();
+                    let _ = self.webview.evaluate_script_with_callback(&format!("window.__electrico.call(()=>{{window.__electrico.child_process.callback.on_{}('{}', '{}');}});", stream, pid, escape(&data).as_str()), move |r| {
+                        if r.len()==0 {
+                            trace!("child_process_callback not OK - resending");
+                            let _ = retry_sender.send(BackendCommand::ChildProcessCallback { pid:pid.clone(), stream:stream.clone(), data:data.as_bytes().into() });
+                        }
+                    });
+                },
+                Err(e) => {
+                    error!("child_process_callback utf error: {}", e);
+                }
+            }
+        }
     }
     pub fn child_process_exit(&mut self, pid:String, exit_code:Option<i32>) {
         let call_script:String;
@@ -173,7 +192,7 @@ impl Backend {
         } else {
             call_script=format!("window.__electrico.child_process.callback.on_close('{}');", pid);
         }
-        let retry_sender = self.retry_sender.clone();
+        let retry_sender = self.command_sender.clone();
         let _ = self.webview.evaluate_script_with_callback(&format!("window.__electrico.call(()=>{{{}}});", call_script.as_str()), move |r| {
             if r.len()==0 {
                 trace!("child_process_exit not OK - resending");
@@ -181,16 +200,54 @@ impl Backend {
             }
         });
     }
-    pub fn retry_commands(&mut self) {
-        if let Ok(command) = self.retry_receiver.try_recv() {
+    pub fn fs_watch_callback(&mut self, wid:String, event:Event) {
+        let call_script = format!("window.__electrico.fs_watcher.on_event('{}', '{:?}', '{}')",
+            wid, 
+            event.kind,
+            event.paths.iter().map(|x| x.as_os_str().to_str().unwrap()).collect::<Vec<_>>().join(";"));
+        let retry_sender = self.command_sender.clone();
+        let _ = self.webview.evaluate_script_with_callback(&format!("window.__electrico.call(()=>{{{}}});", call_script.as_str()), move |r| {
+            if r.len()==0 {
+                trace!("fs_watch_callback not OK - resending");
+                let _ = retry_sender.send(BackendCommand::FSWatchEvent { wid:wid.clone(), event:event.clone() });
+            }
+        });
+    }
+    pub fn command_sender(&mut self) -> Sender<BackendCommand> {
+        self.command_sender.clone()
+    }
+    pub fn process_commands(&mut self) {
+        if let Ok(command) = self.command_receiver.try_recv() {
             match command {
+                BackendCommand::ChildProcessStart { pid, sender } => {
+                    trace!("ChildProcessStart {}", pid);
+                    self.child_process.insert(pid, sender);
+                },
                 BackendCommand::ChildProcessCallback { pid, stream, data } => {
-                    trace!("retrying ChildProcessCallback");
+                    trace!("ChildProcessCallback");
                     self.child_process_callback(pid, stream, data);
                 }
                 BackendCommand::ChildProcessExit { pid, exit_code } => {
-                    trace!("retrying ChildProcessExit");
+                    trace!("ChildProcessExit");
+                    if self.child_process.contains_key(&pid) {
+                        self.child_process.remove(&pid);
+                    }
                     self.child_process_exit(pid, exit_code);
+                },
+                BackendCommand::FSWatchStart { wid, sender } => {
+                    trace!("FSWatchStart {}", wid);
+                    self.fs_watcher.insert(wid, sender);
+                },
+                BackendCommand::FSWatchEvent { wid, event } => {
+                    trace!("FSWatchEvent");
+                    self.fs_watch_callback(wid, event);
+                },
+                BackendCommand::FSWatchStop { wid } => {
+                    trace!("FSWatchStop {}", wid);
+                    if let Some(sender) = self.fs_watcher.get(&wid) {
+                        let _ = sender.send(true);
+                        self.fs_watcher.remove(&wid);
+                    }
                 }
             }
         }

@@ -1,5 +1,6 @@
 (function () {
     //let path = require('path');
+    let uuidv4 = window.__uuidv4;
     var global = window;
     window.global = global;
     let Buffer = require('buffer').Buffer;
@@ -179,6 +180,55 @@
                 };
                 req.send(JSON.stringify(wrapInvoke({"command":"FSReadFile", "path":path, options:options})));
             },
+            watch(path, options, cb) {
+                if (cb==null) {
+                    cb = options;
+                    options=null;
+                }
+                const req = createCMDRequest(false);
+                let wid = uuidv4();
+                req.send(JSON.stringify(wrapInvoke({"command":"FSWatch", wid:wid, "path":path, options:options})));
+                if (req.responseText.startsWith("Error: ")) {
+                    throw "fs.watch error: "+req.responseText.substring(7);
+                }
+                class WatcherCls extends EventEmitter {
+                    constructor() {
+                        super();
+                        this.on_event = (eventType, filename) => {
+                            let mEventType = null;
+                            if (eventType.startsWith("Modify(Name(")) {
+                                mEventType = "rename";
+                            } else if (eventType.startsWith("Create(")) {
+                                mEventType = "change";
+                            } else if (eventType.startsWith("Modify(Data(")) {
+                                mEventType = "change";
+                            } else if (eventType.startsWith("Modify(Metadata(Extended))")) {
+                                mEventType = "change";
+                            }
+                            if (mEventType!=null) {
+                                this.emit("change", mEventType, filename);
+                                if (cb!=null) {
+                                    cb(eventType, filename);
+                                }
+                            }
+                        }
+                        this.close = () => {
+                            const req = createCMDRequest(true);
+                            req.send(JSON.stringify(wrapInvoke({"command":"FSWatchClose", "wid":wid})));
+                        }
+                    }
+                }
+                let watcher = new WatcherCls();
+                window.__electrico.fs_watcher[wid] = watcher;
+                return watcher;
+            },
+            promises: {
+                stat: (path) => {
+                    return new Promise((resolve, reject)=>{
+                        resolve(node.fs.lstatSync(path));
+                    });
+                }
+            }
         },
         http: {
             request(options, cb) {
@@ -262,7 +312,20 @@
         },
         os: {
             homedir: () => {
-                return window.__electrico.appPath;
+                if (window.__electrico.homedir==null) {
+                    const req = createCMDRequest(false);
+                    req.send(JSON.stringify({"action":"Electron", invoke:{"command":"GetAppPath", "path":"userHome"}}));
+                    window.__electrico.homedir = req.responseText;
+                }
+                return window.__electrico.homedir;
+            },
+            tmpdir: () => {
+                if (window.__electrico.tmpdir==null) {
+                    const req = createCMDRequest(false);
+                    req.send(JSON.stringify({"action":"Electron", invoke:{"command":"GetAppPath", "path":"temp"}}));
+                    window.__electrico.tmpdir = req.responseText;
+                }
+                return window.__electrico.tmpdir;
             }
         },
         querystring: queryString,
@@ -278,6 +341,61 @@
                 return require;
             },
             register: (script, path) => {
+
+            }
+        },
+        crypto: {
+            createHash: (alg) => {
+                if (alg=="sha256") {
+                    let SHA256 = require("crypto-js/sha256");
+                    return {
+                        update: (text) => {
+                            let hash = SHA256(text);
+                            return {
+                                digest: (d) => {
+                                    if (d=="hex") {
+                                        return hash.toString();
+                                    } else {
+                                        throw "createHash - unknown digest: "+d;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    throw "createHash - unknown algorithm: "+alg;
+                }
+            }
+        },
+        net: {
+            // TODO
+            Server: {
+                
+            },
+            Socket: {
+            },
+            createServer: {
+
+            },
+            createConnection: {
+
+            }
+        },
+        zlib :{
+            // TODO
+            createDeflateRaw: {
+
+            },
+            ZlibOptions: {
+
+            },
+            InflateRaw: {
+
+            },
+            DeflateRaw: {
+
+            },
+            createInflateRaw: {
 
             }
         }
@@ -304,5 +422,10 @@
     window.__electrico.libs.url = node.url;
     window.__electrico.libs["node:module"] =node.module;
     window.__electrico.libs.module = node.module;
-   
+    window.__electrico.libs["node:crypto"] =node.crypto;
+    window.__electrico.libs.crypto = node.crypto;
+    window.__electrico.libs["node:net"] =node.net;
+    window.__electrico.libs.net = node.net;
+    window.__electrico.libs["node:zlib"] =node.zlib;
+    window.__electrico.libs.zlib = node.zlib;
 })();

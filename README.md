@@ -25,7 +25,7 @@ As for now some basic Electron and Node APIs are - partly - implemented:
 -   common Electron App startup and BrowserWindow methods
 -   Electron IPC and preload.js
 -   parts of the Electron dialog API (OpenDialog, SaveDialog, MessageBox)
--   basic parts of NodeJS file system API (access, fstat, mkdir, readfile, writefile)
+-   basic parts of NodeJS file system API (access, fstat, mkdir, readfile, writefile, watch)
 -   parts of NodeJS process API (child_process spawn)
 
 ### Try out the Test App (Folder /Resources)

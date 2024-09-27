@@ -37,6 +37,7 @@ mime_guess = {version = "2.0.5"}
 lazy_static = {version = "1.5.0"}
 base64 = {version = "0.22.1"}
 directories = {version = "5.0.1"}
+notify = {version = "6.1.1"}
 
 [target."cfg(any(target_os = \"linux\", target_os = \"dragonfly\", target_os = \"freebsd\", target_os = \"openbsd\", target_os = \"netbsd\"))".dependencies]
 webkit2gtk = { version = "=2.0.1", features = [ "v2_40" ]}
