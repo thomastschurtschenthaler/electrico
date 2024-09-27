@@ -241,6 +241,7 @@ fn main() -> wry::Result<()> {
         frontend.send_channel_message(proxy.clone(), browser_window_id, channel, args);
       },
       Event::UserEvent(ElectricoEvents::Exit) => {
+        backend.shutdown();
         *control_flow = ControlFlow::Exit;
       },
       _ => (),

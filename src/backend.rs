@@ -252,4 +252,9 @@ impl Backend {
             }
         }
     }
+    pub fn shutdown(&self) {
+        for (_wid, sender) in &self.fs_watcher {
+            let _ = sender.send(true);
+        }
+    }
 }
