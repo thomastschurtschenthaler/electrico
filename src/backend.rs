@@ -204,7 +204,7 @@ impl Backend {
         let call_script = format!("window.__electrico.fs_watcher.on_event('{}', '{:?}', '{}')",
             wid, 
             event.kind,
-            event.paths.iter().map(|x| x.as_os_str().to_str().unwrap()).collect::<Vec<_>>().join(";"));
+            escape(&event.paths.iter().map(|x| x.as_os_str().to_str().unwrap()).collect::<Vec<_>>().join(";")));
         let retry_sender = self.command_sender.clone();
         let _ = self.webview.evaluate_script_with_callback(&format!("window.__electrico.call(()=>{{{}}});", call_script.as_str()), move |r| {
             if r.len()==0 {

@@ -202,6 +202,8 @@
                                 mEventType = "change";
                             } else if (eventType.startsWith("Modify(Data(")) {
                                 mEventType = "change";
+                            } else if (eventType.startsWith("Modify(Any)")) {
+                                mEventType = "change";
                             } else if (eventType.startsWith("Modify(Metadata(Extended))")) {
                                 mEventType = "change";
                             }
