@@ -49,5 +49,6 @@ pub enum ElectricoEvents {
   FrontendNavigate {browser_window_id:String, page: String, preload: String},
   IPCCallRetry {browser_window_id:String, request_id:String, params:String, sender:Sender<IPCMsg>},
   SendChannelMessageRetry { browser_window_id:String, channel:String, args:String},
-  Exit
+  Exit,
+  Noop
 }
