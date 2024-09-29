@@ -1,10 +1,10 @@
-use std::{fs, io::{Read, Write}, path::Path, process::{Command, Stdio}, sync::mpsc::{self, channel, Receiver, Sender}};
+use std::{fs, io::{Read, Write}, path::Path, process::{Command, Stdio}, sync::mpsc::{self, channel, Receiver, Sender}, time::Duration};
 use base64::prelude::*;
 use log::{debug, error, info, trace, warn};
 use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
 use reqwest::{header::{ACCESS_CONTROL_ALLOW_ORIGIN, CONTENT_TYPE}, Method, Request, StatusCode, Url};
 use tao::event_loop::EventLoopProxy;
-use tokio::runtime::Runtime;
+use tokio::{runtime::Runtime, time::sleep};
 use wry::{http::Response, webview_version, RequestAsyncResponder};
 
 use crate::{common::{respond_404, respond_client_error, respond_ok, respond_status, CONTENT_TYPE_JSON, CONTENT_TYPE_TEXT}, node::types::{Process, ProcessEnv, ProcessVersions}, types::{BackendCommand, ElectricoEvents}};
@@ -416,6 +416,7 @@ pub fn process_node_command(tokio_runtime:&Runtime, app_env:&AppEnv,
                                         let _ = send_command(&proxy, &command_sender, BackendCommand::FSWatchEvent { wid: wid.clone(), event: event });
                                     }
                                 }
+                                sleep(Duration::from_millis(200)).await;
                                 if let Ok(_stop) = receiver.try_recv() {
                                     trace!("fswatch receive stop");
                                     break;
