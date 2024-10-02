@@ -1,6 +1,6 @@
 use std::{collections::HashMap, fs::File, path::PathBuf, sync::mpsc::{self, Receiver, Sender}};
 use muda::MenuId;
-use notify::{Event, FsEventWatcher};
+use notify::{Event, RecommendedWatcher};
 use substring::Substring;
 use log::{debug, error, trace};
 use include_dir::{include_dir, Dir};
@@ -16,7 +16,7 @@ pub struct Backend {
     command_sender:Sender<BackendCommand>,
     command_receiver:Receiver<BackendCommand>,
     child_process:HashMap<String, Sender<ChildProcess>>,
-    fs_watcher:HashMap<String, FsEventWatcher>,
+    fs_watcher:HashMap<String, RecommendedWatcher>,
     fs_files:HashMap<i64, File>
 }
 
@@ -242,7 +242,7 @@ impl Backend {
         trace!("fs_get {}", fd);
         return self.fs_files.get(&fd);
     }
-    pub fn watch_start(&mut self, wid:String, watcher:FsEventWatcher) {
+    pub fn watch_start(&mut self, wid:String, watcher:RecommendedWatcher) {
         trace!("watch_start {}", wid);
         self.fs_watcher.insert(wid, watcher);
     }

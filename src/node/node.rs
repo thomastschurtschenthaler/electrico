@@ -1,4 +1,4 @@
-use std::{fs::{self, OpenOptions}, io::{Read, Seek, SeekFrom, Write}, os::fd::{AsFd, AsRawFd}, path::Path, process::{Command, Stdio}, sync::mpsc::{self, Receiver, Sender}, thread, time::SystemTime};
+use std::{fs::{self, OpenOptions}, io::{Read, Seek, SeekFrom, Write}, path::Path, process::{Command, Stdio}, sync::mpsc::{self, Receiver, Sender}, thread, time::SystemTime};
 use base64::prelude::*;
 use log::{debug, error, info, trace, warn};
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
@@ -289,7 +289,7 @@ pub fn process_node_command(tokio_runtime:&Runtime, app_env:&AppEnv,
             let write = flags.contains("w") || flags.contains("a");
             match OpenOptions::new().read(true).write(write).create(write).truncate(flags.contains("w")).open(path) {
                 Ok(mut file) => {
-                    let fd:i64 = file.as_fd().as_raw_fd().into();
+                    let fd:i64 = 1;
                     if flags.contains("a") {
                         let _ = file.seek(SeekFrom::End(0));
                     }
