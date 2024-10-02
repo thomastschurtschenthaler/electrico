@@ -74,7 +74,7 @@ pub enum NodeCommand {
   FSWriteFile {path:String, data:String, options:Option<FSOptions>},
   FSWatch {path:String, wid:String, options:Option<FSOptions>},
   FSWatchClose {wid:String},
-  FSOpen {path:String, flags:String, mode:String},
+  FSOpen {fd:i64, path:String, flags:String, mode:String},
   FSClose {fd:i64},
   FSRead {fd:i64, offset:i64, length:usize, position:Option<u64>},
   FSWrite {fd:i64, data:String, offset:i64, length:usize, position:Option<u64>},

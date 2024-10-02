@@ -285,11 +285,10 @@ pub fn process_node_command(tokio_runtime:&Runtime, app_env:&AppEnv,
                 }
             }
         },
-        NodeCommand::FSOpen { path, flags, mode } => {
+        NodeCommand::FSOpen {fd, path, flags, mode } => {
             let write = flags.contains("w") || flags.contains("a");
             match OpenOptions::new().read(true).write(write).create(write).truncate(flags.contains("w")).open(path) {
                 Ok(mut file) => {
-                    let fd:i64 = 1;
                     if flags.contains("a") {
                         let _ = file.seek(SeekFrom::End(0));
                     }

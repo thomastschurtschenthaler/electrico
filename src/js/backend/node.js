@@ -12,6 +12,7 @@
     window.__electrico.libs.inherits = inherits;
     window.__electrico.libs.util = null;
     let util = require('util');
+    let _fd=0;
     util.promisify = (f) => {
         return function(...args) {
             return new Promise((resolve, reject) => {
@@ -209,8 +210,9 @@
                 }
                 if (mode==null) mode="0o666";
                 if (flags==null) flags="r";
+                _fd++;
                 const req = createCMDRequest(true);
-                req.send(JSON.stringify(wrapInvoke({"command":"FSOpen", "path":path, "flags":flags.toLowerCase(), "mode":mode})));
+                req.send(JSON.stringify(wrapInvoke({"command":"FSOpen", fd:_fd, "path":path, "flags":flags.toLowerCase(), "mode":mode})));
                 req.onreadystatechange = function() {
                     if (this.readyState == 4) {
                         if (req.status == 200) {
