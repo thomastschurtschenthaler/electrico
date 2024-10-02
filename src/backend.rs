@@ -1,13 +1,13 @@
-use std::{collections::HashMap, path::PathBuf, sync::mpsc::{self, Receiver, Sender}};
+use std::{collections::HashMap, fs::File, path::PathBuf, sync::mpsc::{self, Receiver, Sender}};
 use muda::MenuId;
-use notify::Event;
+use notify::{Event, FsEventWatcher};
 use substring::Substring;
 use log::{debug, error, trace};
 use include_dir::{include_dir, Dir};
 use tao::{dpi::PhysicalSize, event_loop::{EventLoop, EventLoopProxy}, window::{Window, WindowBuilder}};
 use wry::{http::Request, RequestAsyncResponder, WebView, WebViewBuilder};
 use serde_json::Error;
-use crate::{common::{append_js_scripts, build_file_map, escape, handle_file_request, is_module_request}, ipcchannel::IPCMsg, types::BackendCommand};
+use crate::{common::{append_js_scripts, build_file_map, escape, handle_file_request, is_module_request}, ipcchannel::IPCMsg, types::{BackendCommand, ChildProcess}};
 use crate::types::{Package, ElectricoEvents, Command};
 
 pub struct Backend {
@@ -15,8 +15,9 @@ pub struct Backend {
     webview:WebView,
     command_sender:Sender<BackendCommand>,
     command_receiver:Receiver<BackendCommand>,
-    child_process:HashMap<String, Sender<Vec<u8>>>,
-    fs_watcher:HashMap<String, Sender<bool>>
+    child_process:HashMap<String, Sender<ChildProcess>>,
+    fs_watcher:HashMap<String, FsEventWatcher>,
+    fs_files:HashMap<i64, File>
 }
 
 impl Backend {
@@ -125,7 +126,8 @@ impl Backend {
             command_sender,
             command_receiver,
             child_process: HashMap::new(),
-            fs_watcher: HashMap::new()
+            fs_watcher: HashMap::new(),
+            fs_files: HashMap::new()
         }
     }
     pub fn command_callback(&mut self, command:String, message:String) {
@@ -165,7 +167,7 @@ impl Backend {
         if stream=="stdin" {
             if let Some(sender) = self.child_process.get(&pid) {
               trace!("ChildProcessData stdin {}", pid);
-              let _ = sender.send(data);
+              let _ = sender.send(ChildProcess::StdinWrite {data});
             }
         } else {
             match String::from_utf8(data) {
@@ -216,45 +218,64 @@ impl Backend {
     pub fn command_sender(&mut self) -> Sender<BackendCommand> {
         self.command_sender.clone()
     }
+    pub fn child_process_start(&mut self, pid:String, sender:Sender<ChildProcess>) {
+        trace!("child_process_start {}", pid);
+        self.child_process.insert(pid, sender);
+    }
+    pub fn child_process_disconnect(&mut self, pid:String) {
+        trace!("child_process_disconnect {}", pid);
+        if let Some(sender) = self.child_process.get(&pid) {
+            let _ = sender.send(ChildProcess::Disconnect);
+        }
+    }
+    pub fn fs_open(&mut self, fd:i64, file:File) {
+        trace!("fs_open {}", fd);
+        self.fs_files.insert(fd, file);
+    }
+    pub fn fs_close(&mut self, fd:i64) {
+        trace!("fs_close {}", fd);
+        if let Some(_file) = self.fs_files.get(&fd) {
+            self.fs_files.remove(&fd);
+        }
+    }
+    pub fn fs_get(&mut self, fd:i64) -> Option<&File>{
+        trace!("fs_get {}", fd);
+        return self.fs_files.get(&fd);
+    }
+    pub fn watch_start(&mut self, wid:String, watcher:FsEventWatcher) {
+        trace!("watch_start {}", wid);
+        self.fs_watcher.insert(wid, watcher);
+    }
+    pub fn watch_stop(&mut self, wid:String) {
+        trace!("watch_stop {}", wid);
+        if let Some(_watcher) = self.fs_watcher.get(&wid) {
+            self.fs_watcher.remove(&wid);
+        }
+    }
+    
     pub fn process_commands(&mut self) {
         if let Ok(command) = self.command_receiver.try_recv() {
             match command {
-                BackendCommand::ChildProcessStart { pid, sender } => {
-                    trace!("ChildProcessStart {}", pid);
-                    self.child_process.insert(pid, sender);
-                },
                 BackendCommand::ChildProcessCallback { pid, stream, data } => {
                     trace!("ChildProcessCallback");
                     self.child_process_callback(pid, stream, data);
-                }
+                },
                 BackendCommand::ChildProcessExit { pid, exit_code } => {
                     trace!("ChildProcessExit");
                     if self.child_process.contains_key(&pid) {
                         self.child_process.remove(&pid);
                     }
                     self.child_process_exit(pid, exit_code);
-                },
-                BackendCommand::FSWatchStart { wid, sender } => {
-                    trace!("FSWatchStart {}", wid);
-                    self.fs_watcher.insert(wid, sender);
-                },
+                }
                 BackendCommand::FSWatchEvent { wid, event } => {
                     trace!("FSWatchEvent");
                     self.fs_watch_callback(wid, event);
-                },
-                BackendCommand::FSWatchStop { wid } => {
-                    trace!("FSWatchStop {}", wid);
-                    if let Some(sender) = self.fs_watcher.get(&wid) {
-                        let _ = sender.send(true);
-                        self.fs_watcher.remove(&wid);
-                    }
                 }
             }
         }
     }
-    pub fn shutdown(&self) {
-        for (_wid, sender) in &self.fs_watcher {
-            let _ = sender.send(true);
-        }
+    pub fn shutdown(&mut self) {
+        self.fs_watcher.clear();
+        self.fs_files.clear();
     }
 }

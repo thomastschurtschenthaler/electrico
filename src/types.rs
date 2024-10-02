@@ -15,13 +15,15 @@ pub struct Package {
     pub name: String
 }
 
+pub enum ChildProcess {
+  StdinWrite {data: Vec<u8>},
+  Disconnect
+}
+
 pub enum BackendCommand {
-  ChildProcessStart {pid:String, sender:Sender<Vec<u8>>},
   ChildProcessCallback {pid:String, stream:String, data:Vec<u8>},
   ChildProcessExit {pid:String, exit_code:Option<i32>},
-  FSWatchStart {wid:String, sender:Sender<bool>},
   FSWatchEvent {wid:String, event:Event},
-  FSWatchStop {wid:String}
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]

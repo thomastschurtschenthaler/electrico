@@ -12,6 +12,7 @@ pub const CONTENT_TYPE_HTML: &str = "text/html;charset=utf-8";
 pub const CONTENT_TYPE_CSS: &str = "text/css;charset=utf-8";
 pub const CONTENT_TYPE_JSON: &str = "application/json;charset=utf-8";
 pub const CONTENT_TYPE_JS: &str = "text/javascript;charset=utf-8";
+pub const CONTENT_TYPE_BIN: &str = "application/octet-stream";
 pub const JS_DIR_FRONTEND: Dir = include_dir!("src/js/frontend");
 
 pub fn append_js_scripts(script:String, dir:Dir) -> String {

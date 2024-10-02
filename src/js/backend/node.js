@@ -72,7 +72,12 @@
                 return {
                     isDirectory: () => {
                         return resp.isDirectory
-                    }
+                    },
+                    isFile: () => {
+                        return !resp.isDirectory
+                    },
+                    birthtime: resp.birthtime!=null?new Date(resp.birthtime.secs_since_epoch*1000):null,
+                    mtime: resp.mtime!=null?new Date(resp.mtime.secs_since_epoch*1000):null
                 };
             },
             existsSync(path) {
@@ -180,11 +185,134 @@
                 };
                 req.send(JSON.stringify(wrapInvoke({"command":"FSReadFile", "path":path, options:options})));
             },
-            watch(path, options, cb) {
-                if (cb==null) {
-                    cb = options;
-                    options=null;
+            readdirSync(path, options) {
+                if (options!=null && typeof options != 'object') options = {encoding: options};
+                const req = createCMDRequest(false);
+                req.send(JSON.stringify(wrapInvoke({"command":"FSReadDir", "path":path, options:options})));
+                let dirents = JSON.parse(req.responseText);
+                if (options==null || !options.withFileTypes) {
+                    let names = [];
+                    for (let de of dirents) {
+                        names.push(de.name);
+                    }
+                    return names;
                 }
+                return dirents;
+            },
+            open(path, flags, mode, cb) {
+                if (cb==null) {
+                    if (mode!=null) {
+                        cb=mode; mode=null;
+                    } else {
+                        cb=flags; flags=null;
+                    }
+                }
+                if (mode==null) mode="0o666";
+                if (flags==null) flags="r";
+                const req = createCMDRequest(true);
+                req.send(JSON.stringify(wrapInvoke({"command":"FSOpen", "path":path, "flags":flags.toLowerCase(), "mode":mode})));
+                req.onreadystatechange = function() {
+                    if (this.readyState == 4) {
+                        if (req.status == 200) {
+                            cb(null, req.responseText*1);
+                        } else {
+                            cb(req.responseText);
+                        }
+                    }
+                };
+            },
+            close(fd, cb) {
+                const req = createCMDRequest(true);
+                req.send(JSON.stringify(wrapInvoke({"command":"FSClose", "fd":fd})));
+                req.onreadystatechange = function() {
+                    if (this.readyState == 4) {
+                        if (req.status != 200 && cb!=null) {
+                            cb(req.responseText);
+                        }
+                    }
+                };
+            },
+            read(fd, ...args) {
+                let buffer, offset=0, length, position, cb;
+                if (args.length==5) {
+                    buffer=args[0]; offset=args[1]; length=args[2]; position=args[3]; cb=args[4]; 
+                } else {
+                    let options=null;
+                    if (args.length==3) {
+                        buffer=args[0];
+                        options=args[1];
+                        cb=args[2];
+                    } else if (Buffer.isBuffer(args[0])) {
+                        buffer=args[0];
+                        cb=args[1];
+                    } else {
+                        options=args[0];
+                        cb=args[1];
+                    }
+                    if (options!=null) {
+                        offset=options.offset || offset; length=options.length || length; position=options.position || position;
+                        if (buffer==null && options.buffer!=null) buffer=options.buffer;
+                    }
+                    length = buffer.byteLength-offset;
+                }
+                const req = createCMDRequest(true);
+                req.send(JSON.stringify(wrapInvoke({"command":"FSRead", "fd":fd, "offset":offset, "length":length, "position":position})));
+                req.onreadystatechange = function() {
+                    if (this.readyState == 4) {
+                        if (req.status == 200) {
+                            let br = Buffer.from(req.response);
+                            let bytesRead = Math.min(br.byteLength, buffer.byteLength);
+                            br.copy(buffer, 0, 0, bytesRead);
+                            cb(null, bytesRead, buffer);
+                        } else {
+                            cb(req.responseText);
+                        }
+                    }
+                };
+            },
+            write(fd, ...args) {
+                let buffer, offset=0, length, position, cb;
+                let options=null;
+                if (Buffer.isBuffer(args[0])) {
+                    buffer=args[0];
+                    if (args.length>2) {
+                        if (typeof (args[1] === 'object')) {
+                            options=args[1];
+                        } else {
+                            offset=args[1];
+                        }
+                        if (args.length>3) {
+                            length = args[2];
+                            if (args.length>4) {
+                                position = args[3];
+                            }
+                        }
+                    }
+                } else {
+                    buffer=Buffer.from(args[0], args.length==4?args[2]:(args.length==3?args[1]:'utf-8'));
+                    if (args.length==4) position=args[1];
+                }
+                cb=args[args.length-1];
+                if (options!=null) {
+                    offset=options.offset || offset; length=options.length || length; position=options.position || position;
+                }
+                length = buffer.byteLength-offset;
+                
+                let data = buffer.toString('base64');
+                const req = createCMDRequest(true);
+                req.send(JSON.stringify(wrapInvoke({"command":"FSWrite", "fd":fd, "data": data,"offset":offset, "length":length, "position":position})));
+                req.onreadystatechange = function() {
+                    if (this.readyState == 4) {
+                        if (req.status == 200) {
+                            let written = req.responseText*1;
+                            cb(null, written, args[0]);
+                        } else {
+                            cb(req.responseText);
+                        }
+                    }
+                };
+            },
+            watch(path, options, cb) {
                 const req = createCMDRequest(false);
                 let wid = uuidv4();
                 req.send(JSON.stringify(wrapInvoke({"command":"FSWatch", wid:wid, "path":path, options:options})));
@@ -228,6 +356,21 @@
                 stat: (path) => {
                     return new Promise((resolve, reject)=>{
                         resolve(node.fs.lstatSync(path));
+                    });
+                },
+                readdir: (path) => {
+                    return new Promise((resolve, reject)=>{
+                        resolve(node.fs.readdirSync(path));
+                    });
+                },
+                mkdir: (path, options) => {
+                    return new Promise((resolve, reject)=>{
+                        resolve(node.fs.mkdirSync(path, options));
+                    });
+                },
+                readFile: (path, options) => {
+                    return new Promise((resolve, reject)=>{
+                        resolve(node.fs.readFileSync(path, options));
                     });
                 }
             }
@@ -306,6 +449,13 @@
                     },
                     on: (event, cb) => {
                         proc.on[event] = cb;
+                    },
+                    disconnect: () => {
+                        let req = createCMDRequest(false);
+                        req.send(JSON.stringify(wrapInvoke({"command":"ChildProcessDisconnect", pid: pid})));
+                        if (req.responseText!="OK") {
+                            throw "child_process.disconnect error: "+req.responseText;
+                        }
                     }
                 };
                 window.__electrico.child_process[pid] = proc;

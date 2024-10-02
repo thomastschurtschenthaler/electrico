@@ -232,7 +232,7 @@ fn main() -> wry::Result<()> {
             }
           }
           Command::Node { invoke } => {
-            process_node_command(&tokio_runtime, &app_env, proxy.clone(), backend.command_sender(), invoke, responder);
+            process_node_command(&tokio_runtime, &app_env, proxy.clone(), &mut backend, invoke, responder);
           }
         }
       },

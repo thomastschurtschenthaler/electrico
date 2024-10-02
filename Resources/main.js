@@ -40,7 +40,7 @@ ipcMain.on('startwatch', function(event, path) {
   if (watcher!=null) {
     watcher.close();
   }
-  watcher = fs.watch(path);
+  watcher = fs.watch(path, {recursive:true});
   watcher.on("change", (type, file) => {
     writeOutput(`file watch event: ${type}; ${file}\n`, "info");
   });

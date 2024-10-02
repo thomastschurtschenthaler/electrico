@@ -1,3 +1,5 @@
+use std::time::SystemTime;
+
 #[derive(serde::Serialize, serde::Deserialize)]
 pub enum ConsoleLogLevel {
   Info,
@@ -17,7 +19,24 @@ pub struct ConsoleLogParam {
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct FSOptions {
   pub encoding: Option<String>,
-  pub recursive: Option<bool>
+  pub recursive: Option<bool>,
+  #[serde(rename = "withFileTypes")]
+  pub with_file_types:  Option<bool>
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct FSDirent {
+  pub name: String,
+  #[serde(rename = "isDirectory")]
+  pub is_directory: bool,
+  #[serde(rename = "isFile")]
+  pub is_file: bool,
+}
+
+impl FSDirent {
+  pub fn new(name: String, is_directory: bool) -> FSDirent {
+    FSDirent {name, is_directory, is_file:!is_directory}
+  }
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -31,11 +50,13 @@ pub struct HTTPOptions {
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct FSStat {
   #[serde(rename = "isDirectory")]
-  pub is_directory: bool
+  pub is_directory: bool,
+  pub birthtime: Option<SystemTime>,
+  pub mtime: Option<SystemTime>
 }
 impl FSStat {
-  pub fn new(is_directory: bool) -> FSStat {
-    FSStat { is_directory }
+  pub fn new(is_directory: bool, birthtime:Option<SystemTime>, mtime:Option<SystemTime>) -> FSStat {
+    FSStat { is_directory, birthtime, mtime }
   }
 }
 
@@ -49,12 +70,18 @@ pub enum NodeCommand {
   FSLstat {path:String},
   FSMkdir {path:String, options:Option<FSOptions>},
   FSReadFile {path:String, options:Option<FSOptions>},
+  FSReadDir {path:String, options:Option<FSOptions>},
   FSWriteFile {path:String, data:String, options:Option<FSOptions>},
   FSWatch {path:String, wid:String, options:Option<FSOptions>},
   FSWatchClose {wid:String},
+  FSOpen {path:String, flags:String, mode:String},
+  FSClose {fd:i64},
+  FSRead {fd:i64, offset:i64, length:usize, position:Option<u64>},
+  FSWrite {fd:i64, data:String, offset:i64, length:usize, position:Option<u64>},
   HTTPRequest {options:HTTPOptions},
   ChildProcessSpawn {cmd: String, args:Option<Vec<String>>},
-  ChildProcessStdinWrite {pid: String, data:String}
+  ChildProcessStdinWrite {pid: String, data:String},
+  ChildProcessDisconnect {pid: String}
 }
 
 #[derive(Default)]

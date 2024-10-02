@@ -1,13 +1,13 @@
-use std::{fs, io::{Read, Write}, path::Path, process::{Command, Stdio}, sync::mpsc::{self, channel, Receiver, Sender}, time::Duration};
+use std::{fs::{self, OpenOptions}, io::{Read, Seek, SeekFrom, Write}, os::fd::{AsFd, AsRawFd}, path::Path, process::{Command, Stdio}, sync::mpsc::{self, Receiver, Sender}, thread, time::SystemTime};
 use base64::prelude::*;
 use log::{debug, error, info, trace, warn};
-use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
+use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use reqwest::{header::{ACCESS_CONTROL_ALLOW_ORIGIN, CONTENT_TYPE}, Method, Request, StatusCode, Url};
 use tao::event_loop::EventLoopProxy;
-use tokio::{runtime::Runtime, time::sleep};
+use tokio::runtime::Runtime;
 use wry::{http::Response, webview_version, RequestAsyncResponder};
 
-use crate::{common::{respond_404, respond_client_error, respond_ok, respond_status, CONTENT_TYPE_JSON, CONTENT_TYPE_TEXT}, node::types::{Process, ProcessEnv, ProcessVersions}, types::{BackendCommand, ElectricoEvents}};
+use crate::{backend::Backend, common::{respond_404, respond_client_error, respond_ok, respond_status, CONTENT_TYPE_BIN, CONTENT_TYPE_JSON, CONTENT_TYPE_TEXT}, node::types::{FSDirent, Process, ProcessEnv, ProcessVersions}, types::{BackendCommand, ChildProcess, ElectricoEvents}};
 use super::types::{ConsoleLogLevel, FSStat, NodeCommand};
 
 pub struct AppEnv {
@@ -40,9 +40,10 @@ fn send_command(proxy:&EventLoopProxy<ElectricoEvents>, command_sender:&Sender<B
 
 pub fn process_node_command(tokio_runtime:&Runtime, app_env:&AppEnv,
         proxy:EventLoopProxy<ElectricoEvents>,
-        command_sender:Sender<BackendCommand>,
+        backend:&mut Backend,
         command:NodeCommand,
         responder:RequestAsyncResponder)  {
+    let command_sender = backend.command_sender();
     match command {
         NodeCommand::ConsoleLog { params } => {
             match params.level {
@@ -141,7 +142,17 @@ pub fn process_node_command(tokio_runtime:&Runtime, app_env:&AppEnv,
             if !p.exists() {
                 respond_404(responder);
             } else {
-                let stat = FSStat::new(p.is_dir());
+                let mut created:Option<SystemTime>=None;
+                let mut modified:Option<SystemTime>=None;
+                if let Ok(meta) = p.metadata() {
+                    if let Ok(c) = meta.created() {
+                        created = Some(c);
+                    }
+                    if let Ok(m) = meta.modified() {
+                        modified = Some(m);
+                    }
+                }
+                let stat = FSStat::new(p.is_dir(), created, modified);
                 match serde_json::to_string(&stat) {
                     Ok(json) => {
                         respond_status(StatusCode::OK, CONTENT_TYPE_JSON.to_string(), json.into_bytes(), responder);
@@ -187,6 +198,49 @@ pub fn process_node_command(tokio_runtime:&Runtime, app_env:&AppEnv,
                 }
             }
         },
+        NodeCommand::FSReadDir { path, options } => {
+            let mut recursive = false;
+            if let Some(options) = options {
+                if let Some(rec) = options.recursive {
+                    recursive=rec;
+                }
+            }
+            let mut entries:Vec<FSDirent> = Vec::new();
+            fn read_dir(path:String, entries:&mut Vec<FSDirent>, recursive:bool) -> Option<std::io::Error> {
+                match fs::read_dir(path) {
+                    Ok(rd) => {
+                        for e in rd {
+                            if let Ok(e) = e {
+                                let path = e.path().as_os_str().to_str().unwrap().to_string();
+                                if recursive && e.path().is_dir() {
+                                    if let Some(error) = read_dir(path.clone(), entries, recursive) {
+                                        return Some(error);
+                                    }
+                                }
+                                entries.push(FSDirent::new(path, e.path().is_dir()));
+                            }
+                        }
+                        return None;
+                    },
+                    Err(e) => {
+                        error!("FSReadDir error {}", e);
+                        return Some(e);
+                    }
+                }
+            }
+            if let Some(error) = read_dir(path, &mut entries, recursive) {
+                respond_status(StatusCode::BAD_REQUEST, CONTENT_TYPE_TEXT.to_string(), format!("FSReadDir error: {}", error).into_bytes(), responder);
+                return;
+            }
+            match serde_json::to_string(&entries) {
+                Ok(json) => {
+                    respond_status(StatusCode::OK, CONTENT_TYPE_JSON.to_string(), json.into_bytes(), responder);
+                },
+                Err(e) => {
+                    respond_status(StatusCode::INTERNAL_SERVER_ERROR, CONTENT_TYPE_TEXT.to_string(), format!("FSReadDir json serialization error: {}", e).into_bytes(), responder);
+                }
+            }
+        },
         NodeCommand::FSReadFile { path, options } => {
             match fs::read(path.as_str()) {
                 Ok (contents) => {
@@ -229,6 +283,75 @@ pub fn process_node_command(tokio_runtime:&Runtime, app_env:&AppEnv,
                     error!("FSWriteFile base64 decode error: {}", e);
                     respond_status(StatusCode::INTERNAL_SERVER_ERROR, CONTENT_TYPE_TEXT.to_string(), format!("FSWriteFile base64 decode error: {}", e).into_bytes(), responder);
                 }
+            }
+        },
+        NodeCommand::FSOpen { path, flags, mode } => {
+            let write = flags.contains("w") || flags.contains("a");
+            match OpenOptions::new().read(true).write(write).create(write).truncate(flags.contains("w")).open(path) {
+                Ok(mut file) => {
+                    let fd:i64 = file.as_fd().as_raw_fd().into();
+                    if flags.contains("a") {
+                        let _ = file.seek(SeekFrom::End(0));
+                    }
+                    backend.fs_open(fd, file);
+                    respond_status(StatusCode::OK, CONTENT_TYPE_TEXT.to_string(), fd.to_string().into_bytes(), responder); 
+                },
+                Err(e) => {
+                    respond_status(StatusCode::BAD_REQUEST, CONTENT_TYPE_TEXT.to_string(), format!("FSOpen error: {}", e).into_bytes(), responder);
+                }
+            }
+        },
+        NodeCommand::FSClose { fd } => {
+            backend.fs_close(fd);
+            respond_ok(responder);
+        },
+        NodeCommand::FSRead { fd, offset, length, position } => {
+            trace!("FSRead {}, {}, {}, {:?}", fd, offset, length, position);
+            if let Some(mut file) = backend.fs_get(fd) {
+                if let Some(position) = position {
+                    let _ = file.seek(SeekFrom::Start(position));
+                }
+                let _ = file.seek(SeekFrom::Current(offset));
+                let mut buf = vec![0; length];
+                match file.read(&mut buf) {
+                    Ok(read) => {
+                        respond_status(StatusCode::OK, CONTENT_TYPE_BIN.to_string(), buf[0..read].to_vec(), responder);
+                    },
+                    Err(e) => {
+                        error!("FSRead error: {}", e);
+                        respond_status(StatusCode::INTERNAL_SERVER_ERROR, CONTENT_TYPE_TEXT.to_string(), format!("FSRead error: {}", e).into_bytes(), responder);
+                    }
+                }
+            } else {
+                respond_404(responder);
+            }
+        },
+        NodeCommand::FSWrite { fd, data, offset, length, position } => {
+            trace!("FSWrite {}, {}, {}, {:?}", fd, offset, length, position);
+            if let Some(mut file) = backend.fs_get(fd) {
+                if let Some(position) = position {
+                    let _ = file.seek(SeekFrom::Start(position));
+                }
+                let _ = file.seek(SeekFrom::Current(offset));
+                match BASE64_STANDARD.decode(data) {
+                    Ok(mut decoded) => {
+                        match file.write(&mut decoded) {
+                            Ok(written) => {
+                                respond_status(StatusCode::OK, CONTENT_TYPE_BIN.to_string(), written.to_string().as_bytes().to_vec(), responder);
+                            },
+                            Err(e) => {
+                                error!("FSWrite error: {}", e);
+                                respond_status(StatusCode::INTERNAL_SERVER_ERROR, CONTENT_TYPE_TEXT.to_string(), format!("FSWrite error: {}", e).into_bytes(), responder);
+                            }
+                        }
+                    },
+                    Err(e) => {
+                        error!("FSWrite base64 decode error: {}", e);
+                        respond_status(StatusCode::INTERNAL_SERVER_ERROR, CONTENT_TYPE_TEXT.to_string(), format!("FSWrite base64 decode error: {}", e).into_bytes(), responder);
+                    }
+                }
+            } else {
+                respond_404(responder);
             }
         },
         NodeCommand::HTTPRequest { options } => {
@@ -300,8 +423,8 @@ pub fn process_node_command(tokio_runtime:&Runtime, app_env:&AppEnv,
                 .stderr(Stdio::piped())
                 .args(pargs).spawn() {
                 Ok(mut child) => {
-                    let (sender, receiver): (Sender<Vec<u8>>, Receiver<Vec<u8>>) = mpsc::channel();
-                    let _ = send_command(&proxy, &command_sender, BackendCommand::ChildProcessStart { pid: child.id().to_string(), sender: sender });
+                    let (sender, receiver): (Sender<ChildProcess>, Receiver<ChildProcess>) = mpsc::channel();
+                    backend.child_process_start(child.id().to_string(), sender);
                     respond_status(StatusCode::OK, CONTENT_TYPE_TEXT.to_string(), child.id().to_string().into_bytes(), responder); 
                     tokio_runtime.spawn(
                         async move {
@@ -340,9 +463,17 @@ pub fn process_node_command(tokio_runtime:&Runtime, app_env:&AppEnv,
                             }
                             let mut exit_code:Option<i32> = None;
                             loop {
-                                if let Ok(data) = receiver.try_recv() {
-                                    trace!("writing stdin {}", data.len());
-                                    let _ = stdin.write(data.as_slice());
+                                if let Ok(cp) = receiver.try_recv() {
+                                    match cp {
+                                        ChildProcess::StdinWrite { data } => {
+                                            trace!("writing stdin {}", data.len());
+                                            let _ = stdin.write(data.as_slice());
+                                        },
+                                        ChildProcess::Disconnect => {
+                                            trace!("disconnect");
+                                            break;
+                                        }
+                                    }
                                 }
                                 let mut stdinread:usize=0;
                                 let mut stderrread:usize=0;
@@ -360,7 +491,7 @@ pub fn process_node_command(tokio_runtime:&Runtime, app_env:&AppEnv,
                                     trace!("stderr read {}", read);
                                     stderrread = read;
                                     if read>0 {
-                                        let data:Vec<u8> = Vec::from(stderr_buf);
+                                        let data:Vec<u8> = stderr_buf[0..read].to_vec();
                                         let _ = send_command(&proxy, &command_sender, BackendCommand::ChildProcessCallback { pid:child.id().to_string(), stream:"stderr".to_string(), data:data });
                                     }
                                 }
@@ -380,6 +511,7 @@ pub fn process_node_command(tokio_runtime:&Runtime, app_env:&AppEnv,
                                         break;
                                     }
                                 }
+                                thread::yield_now();
                             }
                             let _ = send_command(&proxy, &command_sender, BackendCommand::ChildProcessExit {pid:child.id().to_string(), exit_code:exit_code});
                         }
@@ -391,47 +523,46 @@ pub fn process_node_command(tokio_runtime:&Runtime, app_env:&AppEnv,
             }
         },
         NodeCommand::ChildProcessStdinWrite { pid, data } => {
-            let _ = send_command(&proxy, &command_sender, BackendCommand::ChildProcessCallback { pid:pid, stream:"stdin".to_string(), data:data.into_bytes() });
+            backend.child_process_callback(pid, "stdin".to_string(), data.into_bytes());
+            respond_ok(responder);
+        },
+        NodeCommand::ChildProcessDisconnect { pid } => {
+            backend.child_process_disconnect(pid);
             respond_ok(responder);
         },
         NodeCommand::FSWatch { path, wid, options } => {
-            tokio_runtime.spawn(
-                async move {
-                    let (tx, rx): (Sender<Result<Event, notify::Error>>, Receiver<Result<Event, notify::Error>>) = channel();
-                    match RecommendedWatcher::new(
-                        move |res| {
-                            let _ = tx.send(res);
-                        },
-                        Config::default()
-                    ) {
-                        Ok(mut watcher) => {
-                            respond_ok(responder);
-                            let _ = watcher.watch(path.as_ref(), RecursiveMode::Recursive);
-                            let (sender, receiver): (Sender<bool>, Receiver<bool>) = mpsc::channel();
-                            let _ = send_command(&proxy, &command_sender, BackendCommand::FSWatchStart { wid: wid.clone(), sender: sender });
-                            loop {
-                                if let Ok(res) = rx.try_recv() {
-                                    if let Ok(event) = res {
-                                        trace!("fswatch receive event {:?}", event);
-                                        let _ = send_command(&proxy, &command_sender, BackendCommand::FSWatchEvent { wid: wid.clone(), event: event });
-                                    }
-                                }
-                                sleep(Duration::from_millis(200)).await;
-                                if let Ok(_stop) = receiver.try_recv() {
-                                    trace!("fswatch receive stop");
-                                    break;
-                                }
-                            }
-                        },
-                        Err(e) => {
-                            respond_status(StatusCode::INTERNAL_SERVER_ERROR, CONTENT_TYPE_TEXT.to_string(), format!("Error: {}", e).to_string().into_bytes(), responder); 
-                        }
+            let mut mode = RecursiveMode::NonRecursive;
+            if let Some(options) = options {
+                if let Some(rec) = options.recursive {
+                    if rec {
+                        mode=RecursiveMode::Recursive;
                     }
                 }
-            );
+            }
+            let w_proxy = proxy.clone();
+            let w_command_sender = command_sender.clone();
+            let w_wid = wid.clone();
+            match RecommendedWatcher::new(
+                move |res| {
+                    if let Ok(event) = res {
+                        trace!("fswatch receive event {:?}", event);
+                        let _ = send_command(&w_proxy, &w_command_sender, BackendCommand::FSWatchEvent { wid: w_wid.clone(), event: event });
+                    }
+                },
+                Config::default()
+            ) {
+                Ok(mut watcher) => {
+                    respond_ok(responder);
+                    let _ = watcher.watch(path.as_ref(), mode);
+                    backend.watch_start(wid, watcher);                  
+                },
+                Err(e) => {
+                    respond_status(StatusCode::INTERNAL_SERVER_ERROR, CONTENT_TYPE_TEXT.to_string(), format!("Error: {}", e).to_string().into_bytes(), responder); 
+                }
+            }
         },
         NodeCommand::FSWatchClose { wid } => {
-            let _ = send_command(&proxy, &command_sender, BackendCommand::FSWatchStop { wid });
+            backend.watch_stop(wid);
             respond_ok(responder);
         }
     }
