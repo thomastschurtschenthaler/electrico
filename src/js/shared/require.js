@@ -33,8 +33,8 @@
                 expanded_path="node_modules/"+mpath;
             }
             expanded_path = normalize(expanded_path);
-
-            let cached = fromCache(expanded_path);
+            let cache_path = expanded_path;
+            let cached = fromCache(cache_path);
             if (cached!=null && cached!="" && cache) {
                return cached;
             }
@@ -47,7 +47,6 @@
             }
             if (cached=="" || req.status==301) {
                 //console.trace("js file not found", expanded_path);
-                window.__electrico.module_cache[expanded_path]="";
                 let package_path = window.__create_protocol_url("fil://mod/"+expanded_path+"/package.json");
                 const preq = new XMLHttpRequest();
                 preq.open("GET", package_path, false);
@@ -62,12 +61,7 @@
                 
                 if (!expanded_path.endsWith("js")) expanded_path+=".js";
                 expanded_path = normalize(expanded_path);
-                if (cache) {
-                    let cached = fromCache(expanded_path);
-                    if (cached!=null) {
-                        return cached;
-                    }
-                }
+                
                 const req2 = new XMLHttpRequest();
                 let jsfilepath = window.__create_protocol_url("fil://mod/"+expanded_path);
                 req2.open("GET", jsfilepath, false);
@@ -89,12 +83,9 @@
                 script = window.__replaceImports(script);
                 script = sourceURL+"{\nlet __require_this=_this;"+script+"\n}";
                 try {
-                    /*if (expanded_path.endsWith("platform/product/common/productService.js")) {
-                        console.log("found!");
-                    }*/
                     eval(script);
                 } catch (e) {
-                    console.log("require error", expanded_path, script, e);
+                    //console.log("require error", expanded_path, script, e);
                     throw e;
                 }
                 if (exports.__electrico_deferred!=null) {
@@ -106,7 +97,7 @@
                 exported = module.exports || exports;
             }
             if (cache) {
-                window.__electrico.module_cache[expanded_path]=exported;
+                window.__electrico.module_cache[cache_path]=exported;
             }
             return exported;
         }

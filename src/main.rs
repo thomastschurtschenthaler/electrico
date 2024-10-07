@@ -29,7 +29,7 @@ fn main() -> wry::Result<()> {
 
   env_logger::init_from_env(env);
 
-  let tokio_runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(20).enable_io().enable_time().build().unwrap();
+  let tokio_runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(30).enable_io().enable_time().build().unwrap();
 
   let mut rsrc_dir = std::env::current_exe()
     .expect("Can't find path to executable");
@@ -115,7 +115,7 @@ fn main() -> wry::Result<()> {
       Event::UserEvent(ElectricoEvents::IPCCallRetry{browser_window_id, request_id, params, sender}) => {
         backend.call_ipc_channel(&browser_window_id, &request_id, params, sender);
       }
-      Event::UserEvent(ElectricoEvents::ExecuteCommand{command, responder}) => {
+      Event::UserEvent(ElectricoEvents::ExecuteCommand{command, responder, data_blob}) => {
         trace!("backend ExecuteCommand call");
         match command {
           Command::PostIPC { browser_window_id, request_id, params} => {
@@ -232,7 +232,7 @@ fn main() -> wry::Result<()> {
             }
           }
           Command::Node { invoke } => {
-            process_node_command(&tokio_runtime, &app_env, proxy.clone(), &mut backend, invoke, responder);
+            process_node_command(&tokio_runtime, &app_env, proxy.clone(), &mut backend, invoke, responder, data_blob);
           }
         }
       },

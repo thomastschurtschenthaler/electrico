@@ -1,5 +1,4 @@
-use std::{fs::{self, OpenOptions}, io::{Read, Seek, SeekFrom, Write}, path::Path, process::{Command, Stdio}, sync::mpsc::{self, Receiver, Sender}, thread, time::SystemTime};
-use base64::prelude::*;
+use std::{fs::{self, OpenOptions}, io::{Read, Seek, SeekFrom, Write}, path::Path, time::SystemTime};
 use log::{debug, error, info, trace, warn};
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use reqwest::{header::{ACCESS_CONTROL_ALLOW_ORIGIN, CONTENT_TYPE}, Method, Request, StatusCode, Url};
@@ -7,8 +6,8 @@ use tao::event_loop::EventLoopProxy;
 use tokio::runtime::Runtime;
 use wry::{http::Response, webview_version, RequestAsyncResponder};
 
-use crate::{backend::Backend, common::{respond_404, respond_client_error, respond_ok, respond_status, CONTENT_TYPE_BIN, CONTENT_TYPE_JSON, CONTENT_TYPE_TEXT}, node::types::{FSDirent, Process, ProcessEnv, ProcessVersions}, types::{BackendCommand, ChildProcess, ElectricoEvents}};
-use super::types::{ConsoleLogLevel, FSStat, NodeCommand};
+use crate::{backend::Backend, common::{respond_404, respond_client_error, respond_ok, respond_status, CONTENT_TYPE_BIN, CONTENT_TYPE_JSON, CONTENT_TYPE_TEXT}, node::{common::send_command, ipc::{ipc_connection, ipc_server}, types::{FSDirent, Process, ProcessEnv, ProcessVersions}}, types::{BackendCommand, ElectricoEvents}};
+use super::{process::child_process_spawn, types::{ConsoleLogLevel, FSStat, NodeCommand}};
 
 pub struct AppEnv {
     pub start_args: Vec<String>,
@@ -33,16 +32,12 @@ impl AppEnv {
     }
 }
 
-fn send_command(proxy:&EventLoopProxy<ElectricoEvents>, command_sender:&Sender<BackendCommand>, command:BackendCommand) {
-    let _ = command_sender.send(command);
-    let _ = proxy.send_event(ElectricoEvents::Noop);
-}
-
 pub fn process_node_command(tokio_runtime:&Runtime, app_env:&AppEnv,
         proxy:EventLoopProxy<ElectricoEvents>,
         backend:&mut Backend,
         command:NodeCommand,
-        responder:RequestAsyncResponder)  {
+        responder:RequestAsyncResponder,
+        data_blob:Option<Vec<u8>>)  {
     let command_sender = backend.command_sender();
     match command {
         NodeCommand::ConsoleLog { params } => {
@@ -252,37 +247,34 @@ pub fn process_node_command(tokio_runtime:&Runtime, app_env:&AppEnv,
                 }
             }
         },
-        NodeCommand::FSWriteFile { path, data, options } => {
-            if let Some(options) = options {
-                if let Some(_encoding) = options.encoding {
-                    match fs::write(path.as_str(), data) {
-                        Ok(_) => {
-                            respond_ok(responder);
-                        },
-                        Err (e) => {
-                            error!("FSWriteFile error: {}", e);
-                            respond_status(StatusCode::BAD_REQUEST, CONTENT_TYPE_TEXT.to_string(), format!("FSWriteFile error: {}", e).into_bytes(), responder);
+        NodeCommand::FSWriteFile { path, options } => {
+            if let Some(data) = data_blob {
+                if let Some(options) = options {
+                    if let Some(_encoding) = options.encoding {
+                        match fs::write(path.as_str(), data) {
+                            Ok(_) => {
+                                respond_ok(responder);
+                            },
+                            Err (e) => {
+                                error!("FSWriteFile error: {}", e);
+                                respond_status(StatusCode::BAD_REQUEST, CONTENT_TYPE_TEXT.to_string(), format!("FSWriteFile error: {}", e).into_bytes(), responder);
+                            }
                         }
+                        return;
                     }
-                    return;
                 }
-            }
-            match BASE64_STANDARD.decode(data) {
-                Ok(decoded) => {
-                    match fs::write(path.as_str(), decoded) {
-                        Ok(_) => {
-                            respond_ok(responder);
-                        },
-                        Err (e) => {
-                            error!("FSWriteFile error: {}", e);
-                            respond_status(StatusCode::BAD_REQUEST, CONTENT_TYPE_TEXT.to_string(), format!("FSWriteFile error: {}", e).into_bytes(), responder);
-                        }
+                match fs::write(path.as_str(), data) {
+                    Ok(_) => {
+                        respond_ok(responder);
+                    },
+                    Err (e) => {
+                        error!("FSWriteFile error: {}", e);
+                        respond_status(StatusCode::BAD_REQUEST, CONTENT_TYPE_TEXT.to_string(), format!("FSWriteFile error: {}", e).into_bytes(), responder);
                     }
-                },
-                Err(e) => {
-                    error!("FSWriteFile base64 decode error: {}", e);
-                    respond_status(StatusCode::INTERNAL_SERVER_ERROR, CONTENT_TYPE_TEXT.to_string(), format!("FSWriteFile base64 decode error: {}", e).into_bytes(), responder);
                 }
+            } else {
+                error!("FSWrite error, no data");
+                respond_status(StatusCode::INTERNAL_SERVER_ERROR, CONTENT_TYPE_TEXT.to_string(), format!("FSWriteFile error, no data").into_bytes(), responder);
             }
         },
         NodeCommand::FSOpen {fd, path, flags, mode } => {
@@ -325,30 +317,40 @@ pub fn process_node_command(tokio_runtime:&Runtime, app_env:&AppEnv,
                 respond_404(responder);
             }
         },
-        NodeCommand::FSWrite { fd, data, offset, length, position } => {
+        NodeCommand::FSWrite { fd, offset, length, position } => {
             trace!("FSWrite {}, {}, {}, {:?}", fd, offset, length, position);
             if let Some(mut file) = backend.fs_get(fd) {
                 if let Some(position) = position {
                     let _ = file.seek(SeekFrom::Start(position));
                 }
                 let _ = file.seek(SeekFrom::Current(offset));
-                match BASE64_STANDARD.decode(data) {
-                    Ok(mut decoded) => {
-                        match file.write(&mut decoded) {
-                            Ok(written) => {
-                                respond_status(StatusCode::OK, CONTENT_TYPE_BIN.to_string(), written.to_string().as_bytes().to_vec(), responder);
-                            },
-                            Err(e) => {
-                                error!("FSWrite error: {}", e);
-                                respond_status(StatusCode::INTERNAL_SERVER_ERROR, CONTENT_TYPE_TEXT.to_string(), format!("FSWrite error: {}", e).into_bytes(), responder);
-                            }
+                if let Some(mut data) = data_blob {
+                    match file.write(&mut data) {
+                        Ok(written) => {
+                            respond_status(StatusCode::OK, CONTENT_TYPE_TEXT.to_string(), written.to_string().as_bytes().to_vec(), responder);
+                        },
+                        Err(e) => {
+                            error!("FSWrite error: {}", e);
+                            respond_status(StatusCode::INTERNAL_SERVER_ERROR, CONTENT_TYPE_TEXT.to_string(), format!("FSWrite error: {}", e).into_bytes(), responder);
                         }
-                    },
-                    Err(e) => {
-                        error!("FSWrite base64 decode error: {}", e);
-                        respond_status(StatusCode::INTERNAL_SERVER_ERROR, CONTENT_TYPE_TEXT.to_string(), format!("FSWrite base64 decode error: {}", e).into_bytes(), responder);
                     }
+                } else {
+                    error!("FSWrite error, no data");
+                    respond_status(StatusCode::INTERNAL_SERVER_ERROR, CONTENT_TYPE_TEXT.to_string(), format!("FSWrite error, no data").into_bytes(), responder);
                 }
+                
+            } else {
+                respond_404(responder);
+            }
+        },
+        NodeCommand::FSRealPath { path } => {
+            let rp = Path::new(path.as_str()).as_os_str().to_str().unwrap().to_string();
+            respond_status(StatusCode::OK, CONTENT_TYPE_TEXT.to_string(), rp.as_bytes().to_vec(), responder);
+        },
+        NodeCommand::FSFdatasync { fd } => {
+            if let Some(file) = backend.fs_get(fd) {
+                let _ = file.sync_all();
+                respond_ok(responder);
             } else {
                 respond_404(responder);
             }
@@ -412,117 +414,10 @@ pub fn process_node_command(tokio_runtime:&Runtime, app_env:&AppEnv,
             );
         },
         NodeCommand::ChildProcessSpawn { cmd, args } => {
-            let mut pargs:Vec<String> = Vec::new();
-            if let Some(args) = args {
-                pargs = args;
-            }
-            match Command::new(cmd)
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .args(pargs).spawn() {
-                Ok(mut child) => {
-                    let (sender, receiver): (Sender<ChildProcess>, Receiver<ChildProcess>) = mpsc::channel();
-                    backend.child_process_start(child.id().to_string(), sender);
-                    respond_status(StatusCode::OK, CONTENT_TYPE_TEXT.to_string(), child.id().to_string().into_bytes(), responder); 
-                    tokio_runtime.spawn(
-                        async move {
-                            let mut stdout;
-                            let mut stderr;
-                            let mut stdin;
-                            match child.stdout.take() {
-                                Some(chstdout) => {
-                                    stdout=chstdout;
-                                }, 
-                                None => {
-                                    error!("ChildProcessSpawn stdout not available");
-                                    let _ = send_command(&proxy, &command_sender, BackendCommand::ChildProcessExit {pid:child.id().to_string(), exit_code:None});
-                                    return;
-                                }
-                            }
-                            match child.stderr.take() {
-                                Some(chstderr) => {
-                                    stderr=chstderr;
-                                }, 
-                                None => {
-                                    error!("ChildProcessSpawn stderr not available");
-                                    let _ = send_command(&proxy, &command_sender, BackendCommand::ChildProcessExit {pid:child.id().to_string(), exit_code:None});
-                                    return;
-                                }
-                            }
-                            match child.stdin.take() {
-                                Some(chstdin) => {
-                                    stdin=chstdin;
-                                }, 
-                                None => {
-                                    error!("ChildProcessSpawn stdid not available");
-                                    let _ = send_command(&proxy, &command_sender, BackendCommand::ChildProcessExit {pid:child.id().to_string(), exit_code:None});
-                                    return;
-                                }
-                            }
-                            let mut exit_code:Option<i32> = None;
-                            loop {
-                                if let Ok(cp) = receiver.try_recv() {
-                                    match cp {
-                                        ChildProcess::StdinWrite { data } => {
-                                            trace!("writing stdin {}", data.len());
-                                            let _ = stdin.write(data.as_slice());
-                                        },
-                                        ChildProcess::Disconnect => {
-                                            trace!("disconnect");
-                                            break;
-                                        }
-                                    }
-                                }
-                                let mut stdinread:usize=0;
-                                let mut stderrread:usize=0;
-                                let stdout_buf:&mut [u8] = &mut [0; 1024];
-                                if let Ok(read) = stdout.read(stdout_buf) {
-                                    trace!("stdout read {}", read);
-                                    stdinread = read;
-                                    if read>0 {
-                                        let data:Vec<u8> = stdout_buf[0..read].to_vec();
-                                        let _ = send_command(&proxy, &command_sender, BackendCommand::ChildProcessCallback { pid:child.id().to_string(), stream:"stdout".to_string(), data:data });
-                                    }
-                                }
-                                let stderr_buf:&mut [u8] = &mut [0; 1024];
-                                if let Ok(read) = stderr.read(stderr_buf) {
-                                    trace!("stderr read {}", read);
-                                    stderrread = read;
-                                    if read>0 {
-                                        let data:Vec<u8> = stderr_buf[0..read].to_vec();
-                                        let _ = send_command(&proxy, &command_sender, BackendCommand::ChildProcessCallback { pid:child.id().to_string(), stream:"stderr".to_string(), data:data });
-                                    }
-                                }
-                                match child.try_wait() {
-                                    Ok(event) => {
-                                        if let Some(event) = event {
-                                            exit_code = event.code();
-                                        }
-                                    }
-                                    Err(e) => {
-                                        error!("ChildProcessSpawn try_wait error: {}", e);
-                                        break;
-                                    }
-                                }
-                                if let Some(_exit_code) = exit_code {
-                                    if stdinread==0 && stderrread==0 {
-                                        break;
-                                    }
-                                }
-                                thread::yield_now();
-                            }
-                            let _ = send_command(&proxy, &command_sender, BackendCommand::ChildProcessExit {pid:child.id().to_string(), exit_code:exit_code});
-                        }
-                    );         
-                },
-                Err(e) => {
-                    respond_client_error(format!("Error: {}", e), responder);
-                }
-            }
+            child_process_spawn(cmd, args, backend, tokio_runtime, proxy, command_sender, responder);
         },
-        NodeCommand::ChildProcessStdinWrite { pid, data } => {
-            backend.child_process_callback(pid, "stdin".to_string(), data.into_bytes());
+        NodeCommand::ChildProcessStdinWrite { pid } => {
+            backend.child_process_callback(pid, "stdin".to_string(), data_blob);
             respond_ok(responder);
         },
         NodeCommand::ChildProcessDisconnect { pid } => {
@@ -563,6 +458,39 @@ pub fn process_node_command(tokio_runtime:&Runtime, app_env:&AppEnv,
         NodeCommand::FSWatchClose { wid } => {
             backend.watch_stop(wid);
             respond_ok(responder);
+        },
+        NodeCommand::NETCreateServer {hook, options } => {
+            trace!("NETCreateServer {}", hook);
+            ipc_server(hook, tokio_runtime, proxy, command_sender, responder);
+        },
+        NodeCommand::NETCloseServer { id } => {
+            backend.net_server_close(id);
+            respond_ok(responder);
+        },
+        NodeCommand::NETCloseConnection { id } => {
+            backend.net_connection_close(id);
+            respond_ok(responder);
+        },
+        NodeCommand::NETCreateConnection { hook, id } => {
+            trace!("NETCreateConnection {}, {}", hook, id);
+            ipc_connection(hook, id, tokio_runtime, proxy, command_sender, responder);
+        },
+        NodeCommand::NETWriteConnection { id } => {
+            trace!("NETWriteConnection {}", id);
+            if let Some(data) = data_blob {
+                backend.net_write_connection(id, data);
+                respond_ok(responder);
+            } else {
+                error!("NETWriteConnection error, no data");
+                respond_status(StatusCode::INTERNAL_SERVER_ERROR, CONTENT_TYPE_TEXT.to_string(), format!("NETWriteConnection error, no data").into_bytes(), responder);
+            }
+        },
+        NodeCommand::GetDataBlob { id } => {
+            if let Some(data) = backend.get_data_blob(id) {
+                respond_status(StatusCode::OK, CONTENT_TYPE_BIN.to_string(), data, responder);
+            } else {
+                respond_404(responder);
+            }
         }
     }
 }

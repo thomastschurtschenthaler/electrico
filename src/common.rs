@@ -1,6 +1,7 @@
 use std::{collections::HashMap, fs::{self, File}, path::{Path, PathBuf}};
 
 use include_dir::{include_dir, Dir};
+use queues::{IsQueue, Queue};
 use reqwest::{header::{ACCESS_CONTROL_ALLOW_ORIGIN, CONTENT_TYPE}, StatusCode};
 use tokio::runtime::Runtime;
 use wry::{http::Response, RequestAsyncResponder};
@@ -15,12 +16,14 @@ pub const CONTENT_TYPE_JS: &str = "text/javascript;charset=utf-8";
 pub const CONTENT_TYPE_BIN: &str = "application/octet-stream";
 pub const JS_DIR_FRONTEND: Dir = include_dir!("src/js/frontend");
 
-pub fn append_js_scripts(script:String, dir:Dir) -> String {
+pub fn append_js_scripts(script:String, dir:Dir, filter:Option<&str>) -> String {
     let mut res = script.clone();
     for f in dir.files() {
         let path = f.path().file_name().unwrap().to_str().unwrap().to_string();
-        if path.ends_with(".js") {
-            res += f.contents_utf8().unwrap_or("");
+        if let Some(filter) = filter {
+            if path.ends_with(filter) {
+                res += f.contents_utf8().unwrap_or("");
+            }
         }
     }
     res
@@ -140,6 +143,38 @@ pub fn is_module_request(host:Option<&str>) -> bool {
     }
     false
 }
-        
-
-
+pub struct DataQueue {
+    data_blobs:HashMap<String, Queue<Vec<u8>>>
+}
+impl DataQueue {
+    pub fn new() -> DataQueue {
+        DataQueue {
+            data_blobs:HashMap::new()
+        }
+    }
+    pub fn add(&mut self, k:&String, data:Vec<u8>) {
+        if let Some(q) = self.data_blobs.get_mut(k) {
+           let _ = q.add(data);
+        } else {
+            let mut q = Queue::new();
+            let _ = q.add(data);
+            self.data_blobs.insert(k.clone(), q);
+        }
+    }
+    pub fn take(&mut self, k:&String) -> Option<Vec<u8>>{
+        if let Some(q) = self.data_blobs.get_mut(k) {
+            let ret:Option<Vec<u8>>;
+            if let Ok(data) = q.peek() {
+                let _ = q.remove();
+                ret = Some(data);
+            } else {
+                ret = None;
+            }
+            if q.size()==0 {
+                self.data_blobs.remove(k);
+            }
+            return ret;
+        }
+        None
+    }
+}

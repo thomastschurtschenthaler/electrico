@@ -5,9 +5,10 @@ use substring::Substring;
 use log::{debug, error, trace};
 use include_dir::{include_dir, Dir};
 use tao::{dpi::PhysicalSize, event_loop::{EventLoop, EventLoopProxy}, window::{Window, WindowBuilder}};
+use urlencoding::decode;
 use wry::{http::Request, RequestAsyncResponder, WebView, WebViewBuilder};
 use serde_json::Error;
-use crate::{common::{append_js_scripts, build_file_map, escape, handle_file_request, is_module_request}, ipcchannel::IPCMsg, types::{BackendCommand, ChildProcess}};
+use crate::{common::{append_js_scripts, build_file_map, escape, handle_file_request, is_module_request, respond_404, DataQueue}, ipcchannel::IPCMsg, types::{BackendCommand, ChildProcess, NETConnection, NETServer}};
 use crate::types::{Package, ElectricoEvents, Command};
 
 pub struct Backend {
@@ -17,7 +18,10 @@ pub struct Backend {
     command_receiver:Receiver<BackendCommand>,
     child_process:HashMap<String, Sender<ChildProcess>>,
     fs_watcher:HashMap<String, RecommendedWatcher>,
-    fs_files:HashMap<i64, File>
+    fs_files:HashMap<i64, File>,
+    net_server:HashMap<String, Sender<NETServer>>,
+    net_connections:HashMap<String, Sender<NETConnection>>,
+    data_queue:DataQueue
 }
 
 impl Backend {
@@ -26,9 +30,9 @@ impl Backend {
 
         let mut backendjs:String = String::new();
         const JS_DIR_SHARED: Dir = include_dir!("src/js/shared");
-        backendjs = append_js_scripts(backendjs, JS_DIR_SHARED);
+        backendjs = append_js_scripts(backendjs, JS_DIR_SHARED, Some(".js"));
         const JS_DIR_BACKEND: Dir = include_dir!("src/js/backend");
-        backendjs = append_js_scripts(backendjs, JS_DIR_BACKEND);
+        backendjs = append_js_scripts(backendjs, JS_DIR_BACKEND, Some("electrico.js"));
         let backend_js_files = build_file_map(&JS_DIR_BACKEND);
         let init_script = backendjs+"\nwindow.__electrico.loadMain('"+package.main.to_string().as_str()+"');";
         
@@ -52,23 +56,44 @@ impl Backend {
             .unwrap();
         
         let cmd_handler = move |request: Request<Vec<u8>>, responder:RequestAsyncResponder| {
-            trace!("backend cmd request {} {}", request.uri().path().to_string(), request.body().len());
-            let msgr =  String::from_utf8(request.body().to_vec());
-            match msgr {
-                Ok(msg) => {
-                  trace!("backend cmd request body {}", msg.as_str());
-                  let commandr:Result<Command, Error> = serde_json::from_str(msg.as_str());
-                  match commandr {
-                    Ok (command) => {
-                      let _ = proxy.send_event(ElectricoEvents::ExecuteCommand{command, responder});
-                    }
+            let path = request.uri().path().to_string();
+            trace!("backend cmd request {} {}", path, request.body().len());
+            let cmdmsg:String;
+            let data_blob:Option<Vec<u8>>;
+            if let Some(queryenc) = request.uri().query() {
+                if let Ok(query) = decode(queryenc) {
+                    cmdmsg=query.to_string();
+                    data_blob = Some(request.body().to_vec());
+                } else {
+                    error!("url decoder error");
+                    respond_404(responder);
+                    return;
+                }
+            } else {
+                let msgr =  String::from_utf8(request.body().to_vec());
+                match msgr {
+                    Ok(msg) => {
+                        trace!("backend cmd request body {}", msg.as_str());
+                        cmdmsg=msg;
+                        data_blob=None;
+                    },
                     Err(e) => {
-                      error!("json serialize error {}", e.to_string());
+                        error!("utf8 error {}", e);
+                        respond_404(responder);
+                        return;
                     }
-                  }
-                },
+                }
+            }
+            
+            let commandr:Result<Command, Error> = serde_json::from_str(cmdmsg.as_str());
+            match commandr {
+                Ok (command) => {
+                    let _ = proxy.send_event(ElectricoEvents::ExecuteCommand{command, responder, data_blob});
+                }
                 Err(e) => {
-                  error!("utf8 error {}", e.to_string());
+                    error!("json serialize error {}", e.to_string());
+                    respond_404(responder);
+                    return;
                 }
             }
         };
@@ -127,7 +152,10 @@ impl Backend {
             command_receiver,
             child_process: HashMap::new(),
             fs_watcher: HashMap::new(),
-            fs_files: HashMap::new()
+            fs_files: HashMap::new(),
+            net_server: HashMap::new(),
+            net_connections: HashMap::new(),
+            data_queue: DataQueue::new()
         }
     }
     pub fn command_callback(&mut self, command:String, message:String) {
@@ -163,28 +191,26 @@ impl Backend {
     pub fn dom_content_loaded(&mut self, id:&String) {
         let _ = self.webview.evaluate_script(format!("window.__electrico.domContentLoaded('{}');", id).as_str());
     }
-    pub fn child_process_callback(&mut self, pid:String, stream:String, data:Vec<u8>) {
+    pub fn child_process_callback(&mut self, pid:String, stream:String, data:Option<Vec<u8>>) {
         if stream=="stdin" {
             if let Some(sender) = self.child_process.get(&pid) {
-              trace!("ChildProcessData stdin {}", pid);
-              let _ = sender.send(ChildProcess::StdinWrite {data});
+              trace!("ChildProcessData stdin {} {:?}", pid, data);
+              if let Some(data) = data {
+                let _ = sender.send(ChildProcess::StdinWrite {data});
+              }
             }
         } else {
-            match String::from_utf8(data) {
-                Ok(data) => {
-                    trace!("child_process_callback {} {}", stream, pid);
-                    let retry_sender = self.command_sender.clone();
-                    let _ = self.webview.evaluate_script_with_callback(&format!("window.__electrico.call(()=>{{window.__electrico.child_process.callback.on_{}('{}', '{}');}});", stream, pid, escape(&data).as_str()), move |r| {
-                        if r.len()==0 {
-                            trace!("child_process_callback not OK - resending");
-                            let _ = retry_sender.send(BackendCommand::ChildProcessCallback { pid:pid.clone(), stream:stream.clone(), data:data.as_bytes().into() });
-                        }
-                    });
-                },
-                Err(e) => {
-                    error!("child_process_callback utf error: {}", e);
-                }
+            trace!("child_process_callback {} {}", stream, pid);
+            if let Some(data) = data {
+                self.data_queue.add(&pid, data);
             }
+            let retry_sender = self.command_sender.clone();
+            let _ = self.webview.evaluate_script_with_callback(&format!("window.__electrico.call(()=>{{window.__electrico.child_process.callback.on_{}('{}');}});", stream, pid), move |r| {
+                if r.len()==0 {
+                    trace!("child_process_callback not OK - resending");
+                    let _ = retry_sender.send(BackendCommand::ChildProcessCallback { pid:pid.clone(), stream:stream.clone(), data:None });
+                }
+            });
         }
     }
     pub fn child_process_exit(&mut self, pid:String, exit_code:Option<i32>) {
@@ -252,7 +278,74 @@ impl Backend {
             self.fs_watcher.remove(&wid);
         }
     }
-    
+    pub fn net_server_conn_start(&mut self, hook:String, id:String, sender:Sender<NETConnection>) {
+        let call_script=format!("window.__electrico.net_server.callback.on_start('{}', '{}');", hook, id);
+        self.net_connections.insert(id.clone(), sender.clone());
+        let retry_sender = self.command_sender.clone();
+        let _ = self.webview.evaluate_script_with_callback(&format!("window.__electrico.call(()=>{{{}}});", call_script.as_str()), move |r| {
+            if r.len()==0 {
+                trace!("net_server_conn_start not OK - resending");
+                let _ = retry_sender.send(BackendCommand::NETServerConnStart { hook:hook.clone(), id:id.clone(), sender:sender.clone()});
+            }
+        });
+    }
+    pub fn net_server_close(&mut self, id:String) {
+        if let Some(sender) = self.net_server.get(&id) {
+            let _ = sender.send(NETServer::Close);
+            self.net_server.remove(&id);
+        }
+    }
+    pub fn net_connection_close(&mut self, id:String) {
+        if let Some(sender) = self.net_connections.get(&id) {
+            let _ = sender.send(NETConnection::EndConnection);
+        }
+    }
+    pub fn net_client_conn_start(&mut self, id:String, sender:Sender<NETConnection>) {
+        self.net_connections.insert(id.clone(), sender.clone());
+    }
+    pub fn net_connection_data(&mut self, id:String, data:Option<Vec<u8>>) {
+        if let Some(data) = data {
+            self.data_queue.add(&id, data);
+        }
+        let call_script=format!("window.__electrico.net_server.callback.on_data('{}');", id);
+        let retry_sender = self.command_sender.clone();
+        let _ = self.webview.evaluate_script_with_callback(&format!("window.__electrico.call(()=>{{{}}});", call_script.as_str()), move |r| {
+            if r.len()==0 {
+                trace!("net_connection_data not OK - resending");
+                let _ = retry_sender.send(BackendCommand::NETConnectionData { id:id.clone(), data:None });
+            }
+        });
+    }
+    pub fn net_connection_end(&mut self, id:String) {
+        if let Some(sender) = self.net_connections.get(&id) {
+            let _ = sender.send(NETConnection::Disconnect);
+            self.net_connections.remove(&id);
+        }
+        let call_script=format!("window.__electrico.net_server.callback.on_end('{}');", id);
+        let retry_sender = self.command_sender.clone();
+        let _ = self.webview.evaluate_script_with_callback(&format!("window.__electrico.call(()=>{{{}}});", call_script.as_str()), move |r| {
+            if r.len()==0 {
+                trace!("net_connection_end not OK - resending");
+                let _ = retry_sender.send(BackendCommand::NETConnectionEnd { id:id.clone()});
+            }
+        });
+    }
+    pub fn net_write_connection(&mut self, id:String, data:Vec<u8>) {
+        if let Some(sender) = self.net_connections.get(&id) {
+            let _ = sender.send(NETConnection::Write { data });
+        } else {
+            error!("net_write_connection no sender for id {}", id);
+        }
+    }
+    pub fn get_data_blob(&mut self, id:String) -> Option<Vec<u8>> {
+        let data:Option<Vec<u8>>;
+        if let Some(d) = self.data_queue.take(&id) {
+            data = Some(d.to_vec());
+        } else {
+            data = None;
+        };
+        return data;
+    }
     pub fn process_commands(&mut self) {
         if let Ok(command) = self.command_receiver.try_recv() {
             match command {
@@ -270,7 +363,27 @@ impl Backend {
                 BackendCommand::FSWatchEvent { wid, event } => {
                     trace!("FSWatchEvent");
                     self.fs_watch_callback(wid, event);
+                },
+                BackendCommand::NETServerStart { id, sender } => {
+                    trace!("NETServerStart");
+                    self.net_server.insert(id, sender);
                 }
+                BackendCommand::NETServerConnStart { hook, id, sender } => {
+                    trace!("NETServerConnStart {}", hook);
+                    self.net_server_conn_start(hook, id, sender);
+                },
+                BackendCommand::NETClientConnStart { id, sender } => {
+                    trace!("NETClientConnStart {}", id);
+                    self.net_client_conn_start(id, sender);
+                },
+                BackendCommand::NETConnectionData {id,  data } => {
+                    trace!("NETConnectionData {}", id);
+                    self.net_connection_data(id, data);
+                },
+                BackendCommand::NETConnectionEnd { id } => {
+                    trace!("NETServerConnEnd {}", id);
+                    self.net_connection_end(id);
+                },
             }
         }
     }

@@ -8,9 +8,70 @@ var __electrico_nonce=null;
             //console.log("excluded",k);
         }
     }
-    window.__init_shared(window, true);
+    window.__init_shared(window);
+    function createCMDRequest(async, name) {
+        const req = new XMLHttpRequest();
+        req.open("POST", window.__create_protocol_url("cmd://cmd/"+(name!=null?name:"execute")), async);
+        return req;
+    }
+    window.createCMDRequest=createCMDRequest;
+    let e_command = function(action) {
+        return new Proxy({}, {
+            get(target, call, rec) {
+                return function(params, data_blob) {
+                    let command; let async=false;
+                    if (call.startsWith("async")) {
+                        async=true;
+                        command=call.substring(5);
+                    } else if (call.startsWith("sync")) {
+                        command=call.substring(4);
+                    } else {
+                        command=call;
+                    }
+                    if (params==null) {
+                        params={};
+                    }
+                    let body; let urlcmd=null;
+                    let cmdjson = JSON.stringify({"action":action, invoke:{"command":command, ...params}});
+                    if (data_blob!=null) {
+                        urlcmd=cmdjson;
+                        body=data_blob;
+                    } else {
+                        body=cmdjson;
+                    }
+                    const req = new XMLHttpRequest();
+                    req.open("POST", window.__create_protocol_url("cmd://cmd/"+action+"."+call+(urlcmd!=null?("?"+encodeURIComponent(urlcmd)):"")), async);
+                    req.send(body);
+                    if (async) {
+                        return {
+                            then: cb => {
+                                req.onreadystatechange = function() {
+                                    if (this.readyState == 4) {
+                                        if (req.status == 200) {
+                                            cb(null, req.responseText);
+                                        } else {
+                                            cb(req.responseText, null);
+                                        }
+                                    }
+                                };
+                            }
+                        }
+                    } else {
+                        if (req.status==200) {
+                            return {r:req.responseText};
+                        } else {
+                            return {e:req.responseText};
+                        }
+                    }
+                };
+            }
+        });
+    }
+    window.$e_node=e_command("Node");
+    window.$e_electron=e_command("Electron");
+
     function createLogMsg(level, logmsg, logdata) {
-        return {"action":"Node", invoke:{command:"ConsoleLog", "params":{"level": level, "logmsg":logmsg, "logdata":JSON.stringify(logdata)}}};
+        return {"params":{"level": level, "logmsg":logmsg, "logdata":JSON.stringify(logdata)}};
     }
     
     window.onerror = (event) => {
@@ -23,32 +84,27 @@ var __electrico_nonce=null;
     let console_trace = window.console.trace;
     window.console.log = (logmsg, ...logdata) => {
         console_log(logmsg, ...logdata);
-        const req = createCMDRequest(true);
-        req.send(JSON.stringify(createLogMsg("Info", logmsg+"", logdata)));
+        $e_node.asyncConsoleLog(createLogMsg("Info", logmsg+"", logdata));
     };
     window.console.info = window.console.log;
     window.console.debug = (logmsg, ...logdata) => {
         console_debug(logmsg, ...logdata);
-        const req = createCMDRequest(true);
-        req.send(JSON.stringify(createLogMsg("Debug", logmsg+"", logdata)));
+        $e_node.asyncConsoleLog(createLogMsg("Debug", logmsg+"", logdata));
     };
     window.console.error = (logmsg, ...logdata) => {
         console_error(logmsg, ...logdata);
-        const req = createCMDRequest(true);
         for (let i=0; i<logdata.length; i++) {
             if (logdata[i] instanceof Error) logdata[i]=logdata[i].message;
         }
-        req.send(JSON.stringify(createLogMsg("Error", logmsg+"", logdata)));
+        $e_node.asyncConsoleLog(createLogMsg("Error", logmsg+"", logdata));
     };
     window.console.warn = (logmsg, ...logdata) => {
         console_warn(logmsg, ...logdata);
-        const req = createCMDRequest(true);
-        req.send(JSON.stringify(createLogMsg("Warn", logmsg+"", logdata)));
+        $e_node.asyncConsoleLog(createLogMsg("Warn", logmsg+"", logdata));
     };
     window.console.trace = (logmsg, ...logdata) => {
         console_trace(logmsg, ...logdata);
-        const req = createCMDRequest(true);
-        req.send(JSON.stringify(createLogMsg("Trace", logmsg+"", logdata)));
+        $e_node.asyncConsoleLog(createLogMsg("Trace", logmsg+"", logdata));
     };
     var SenderCls=null;
     function callChannel(timeout, browserWindowID, requestID, channel, ...args) {
@@ -91,7 +147,7 @@ var __electrico_nonce=null;
                 if (response==undefined) response=null;
                 event.returnValue = response;
                 timeout.cleared = true;
-                const req = createCMDRequest(true);
+                const req = createCMDRequest(true, "Frontend.SetIPCResponse");
                 req.send(JSON.stringify({"action":"SetIPCResponse", "request_id":requestID, "params": JSON.stringify(response)}));
             }).catch((e) => {
                 console.error("callChannel error", e);
@@ -109,6 +165,9 @@ var __electrico_nonce=null;
             arguments: JSON.parse(argumentsstr.substring(sep_requestid+2, argumentsstr.length))
         }
     }
+    function wrapNodeInvoke(invoke) {
+        return {"action":"Node", invoke:invoke};
+    }
     window.__electrico={
         app_menu:{},
         module_paths: {},
@@ -119,16 +178,22 @@ var __electrico_nonce=null;
         },
         child_process: {
             callback: {
-                on_stdout: (pid, data) => {
+                on_stdout: (pid) => {
+                    let Buffer = require('buffer').Buffer;
+                    let {r, e} = $e_node.syncGetDataBlob({"id":pid});
+                    let bdata = Buffer.from(r);
                     let cb = window.__electrico.child_process[pid].stdout_on['data'];
                     if (cb!=null) {
-                        cb(data);
+                        cb(bdata);
                     }
                 },
                 on_stderr: (pid, data) => {
+                    let Buffer = require('buffer').Buffer;
+                    let {r, e} = $e_node.syncGetDataBlob({"id":pid});
+                    let bdata = Buffer.from(r);
                     let cb = window.__electrico.child_process[pid].stderr_on['data'];
                     if (cb!=null) {
-                        cb(data);
+                        cb(bdata);
                     }
                 },
                 on_close: (pid, exit_code) => {
@@ -154,6 +219,32 @@ var __electrico_nonce=null;
                 }
             }
         },
+        net_server: {
+            callback: {
+                on_start: (hook, id) => {
+                    let server = window.__electrico.net_server[hook];
+                    if (server!=null) {
+                        server._connection_start(id);
+                    }
+                },
+                on_data: (id) => {
+                    let connection = window.__electrico.net_server[id];
+                    if (connection!=null) {
+                        let Buffer = require('buffer').Buffer;
+                        let {r, e} = $e_node.syncGetDataBlob({"id":id});
+                        let bdata = Buffer.from(r);
+                        connection.emit("data", bdata);
+                    }
+                },
+                on_end: (id) => {
+                    let connection = window.__electrico.net_server[id];
+                    if (connection!=null) {
+                        connection._connection_end(id);
+                    }
+                }
+            }
+        },
+        net_client: {},
         app: {},
         libs: window.__electrico!=null?window.__electrico.libs:{},
         getLib: (mpath, nonce) => {
@@ -194,7 +285,7 @@ var __electrico_nonce=null;
                         if (resp==null && window.__electrico.error!=null) {
                             console.error("callChannel script error", channel, window.__electrico.error);
                             delete window.__electrico.error;
-                            const req = createCMDRequest(true);
+                            const req = createCMDRequest(true, "Frontend.SetIPCResponse");
                             req.send(JSON.stringify({"action":"SetIPCResponse", "request_id":p.requestID, "params": JSON.stringify(null)}));
                         } else {
                             setTimeout(timeout.trigger, 1000);
@@ -225,7 +316,7 @@ var __electrico_nonce=null;
                     }
                     window.__electrico.browser_window[winid].emit("close", closeEvent);
                     if (!prevented) {
-                        const req = createCMDRequest(true);
+                        const req = createCMDRequest(true, "Frontend.BrowserWindowClose");
                         req.send(JSON.stringify(window.__electrico.wrapInvoke({"command":"BrowserWindowClose", "id":winid}))); 
                     }
                 }
@@ -249,15 +340,13 @@ var __electrico_nonce=null;
             if (prop=="stdout") {
                 return {
                     write: (d) => {
-                        const req = createCMDRequest(true);
-                        req.send(JSON.stringify(createLogMsg("Info", d)));
+                        console.log(d);
                     }
                 }
             }
             if (prop=="argv") {
-                const req = createCMDRequest(false);
-                req.send(JSON.stringify({"action":"Node", invoke:{command:"GetStartArgs"}}));
-                return JSON.parse(req.responseText);
+                let {r, e} = $e_node.syncGetStartArgs();
+                return JSON.parse(r);
             }
             if (prop=="cwd") {
                 return () => {
@@ -279,9 +368,8 @@ var __electrico_nonce=null;
                 }
             }
             if (_process==null) {
-                const req = createCMDRequest(false);
-                req.send(JSON.stringify({"action":"Node", invoke:{command:"GetProcessInfo"}}));
-                _process = JSON.parse(req.responseText);
+                let {r, e} = $e_node.syncGetProcessInfo();
+                _process = JSON.parse(r);
                 for (let k in _process) {
                     target[k] = _process[k];
                 }
@@ -291,3 +379,5 @@ var __electrico_nonce=null;
     });
     window.process=process;
 })();
+require("./node.js");
+require("./electron.js");

@@ -20,10 +20,25 @@ pub enum ChildProcess {
   Disconnect
 }
 
+pub enum NETConnection {
+  Write {data: Vec<u8>},
+  Disconnect,
+  EndConnection
+}
+
+pub enum NETServer {
+  Close
+}
+
 pub enum BackendCommand {
-  ChildProcessCallback {pid:String, stream:String, data:Vec<u8>},
+  ChildProcessCallback {pid:String, stream:String, data:Option<Vec<u8>>},
   ChildProcessExit {pid:String, exit_code:Option<i32>},
   FSWatchEvent {wid:String, event:Event},
+  NETServerStart {id:String, sender:Sender<NETServer>},
+  NETServerConnStart {hook:String, id:String, sender:Sender<NETConnection>},
+  NETConnectionData {id:String, data:Option<Vec<u8>>},
+  NETConnectionEnd {id:String},
+  NETClientConnStart {id:String, sender:Sender<NETConnection>},
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -47,7 +62,7 @@ pub enum FrontendCommand {
 }
 
 pub enum ElectricoEvents {
-  ExecuteCommand {command: Command, responder: RequestAsyncResponder},
+  ExecuteCommand {command: Command, responder: RequestAsyncResponder, data_blob:Option<Vec<u8>>},
   FrontendNavigate {browser_window_id:String, page: String, preload: String},
   IPCCallRetry {browser_window_id:String, request_id:String, params:String, sender:Sender<IPCMsg>},
   SendChannelMessageRetry { browser_window_id:String, channel:String, args:String},

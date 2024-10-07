@@ -16,11 +16,11 @@
     util.promisify = (f) => {
         return function(...args) {
             return new Promise((resolve, reject) => {
-                f(...args, (err, value) => {
-                    if (error!=null) {
+                f(...args, (err, ...value) => {
+                    if (err!=null) {
                         reject(err);
                     } else {
-                        resolve(value);
+                        resolve(...value);
                     }
                 });
             })
@@ -43,33 +43,26 @@
                 "X_OK": 8,
             },
             accessSync(path, mode) {
-                const req = createCMDRequest(false);
-                req.send(JSON.stringify(wrapInvoke({"command":"FSAccess", "path":path, "mode": mode!=null?mode:1})));
-                if (req.responseText!="OK") throw "file access failed: "+path;
+                let {r, e} = $e_node.syncFSAccess({"path":path, "mode": mode!=null?mode:1});
+                if (e!=null) throw "file access failed: "+path;
             },
             access(path, mode, cb) {
                 if (cb==null) {
                     cb = mode;
                     mode=null;
-                } 
-                const req = createCMDRequest(false);
-                req.onreadystatechange = function() {
-                    if (this.readyState == 4) {
-                        if (req.status == 200) {
-                            if (req.responseText=="OK") {
-                                cb();
-                            } else {
-                                cb("file access failed: "+path);
-                            }
-                        }
+                }
+                $e_node.asyncFSAccess({"path":path, "mode": mode!=null?mode:1}).then((e, r)=>{
+                    if (e!=null) {
+                        cb("file access failed: "+path);
+                    } else {
+                        cb();
                     }
-                };
-                req.send(JSON.stringify(wrapInvoke({"command":"FSAccess", "path":path, "mode": mode!=null?mode:1})));
+                });
             },
             lstatSync(path) {
-                const req = createCMDRequest(false);
-                req.send(JSON.stringify(wrapInvoke({"command":"FSLstat", "path":path})));
-                let resp = JSON.parse(req.responseText);
+                let {r, e} = $e_node.syncFSLstat({"path":path});
+                if (e!=null) throw "lstat failed: "+path;
+                let resp = JSON.parse(r);
                 return {
                     isDirectory: () => {
                         return resp.isDirectory
@@ -82,35 +75,27 @@
                 };
             },
             existsSync(path) {
-                const req = createCMDRequest(false);
-                req.send(JSON.stringify(wrapInvoke({"command":"FSAccess", "path":path, "mode": 1})));
-                return req.responseText=="OK";
+                let {r, e} = $e_node.syncFSAccess({"path":path, "mode": 1});
+                return r=="OK";
             },
             exists(path, mode, cb) {
                 if (cb==null) {
                     cb = mode;
                     mode=null;
-                } 
-                const req = createCMDRequest(false);
-                req.onreadystatechange = function() {
-                    if (this.readyState == 4) {
-                        if (req.status == 200) {
-                            if (req.responseText=="OK") {
-                                cb(true);
-                            } else {
-                                cb(false);
-                            }
-                        }
+                }
+                $e_node.asyncFSAccess({"path":path, "mode": 1}).then((e, r)=>{
+                    if (r=="OK") {
+                        cb(true);
+                    } else {
+                        cb(false);
                     }
-                };
-                req.send(JSON.stringify(wrapInvoke({"command":"FSAccess", "path":path, "mode": 1})));
+                });
             },
             mkdirSync(path, options) {
                 if (options!=null && typeof options != 'object') options = {recursive: options};
-                const req = createCMDRequest(false);
-                req.send(JSON.stringify(wrapInvoke({"command":"FSMkdir", "path":path, options:options})));
-                if (req.status != 200) throw "mkdir failed: "+path;
-                return req.responseText;
+                let {r, e} = $e_node.syncFSMkdir({"path":path, options:options});
+                if (e!=null) throw "mkdir failed: "+path;
+                return r;
             },
             mkdir(path, options, cb) {
                 if (cb==null) {
@@ -118,23 +103,18 @@
                     options=null;
                 }
                 if (options!=null && typeof options != 'object') options = {recursive: options};
-                const req = createCMDRequest(true);
-                req.onreadystatechange = function() {
-                    if (this.readyState == 4) {
-                        if (req.status == 200) {
-                            cb(req.responseText);
-                        } else throw "mkdir failed: "+path;
+                $e_node.asyncFSMkdir({"path":path, options:options}).then((e, r)=>{
+                    if (e!==null) {
+                        throw "mkdir failed: "+path;
+                    } else {
+                        cb(r);
                     }
-                };
-                req.send(JSON.stringify(wrapInvoke({"command":"FSMkdir", "path":path, options:options})));
+                });
             },
             writeFileSync(path, data, options) {
                 if (options!=null && typeof options != 'object') options = {encoding: options};
-                const req = createCMDRequest(false);
-                if (options==null || options.encoding==null) {
-                    data = btoa(data);
-                }
-                req.send(JSON.stringify(wrapInvoke({"command":"FSWriteFile", "path":path, "data": data, options:options})));
+                let {r, e} = $e_node.syncFSWriteFile({"path":path, options:options}, data);
+                if (e!=null) throw "writeFileSync failed: "+path;
             },
             writeFile(path, data, options, cb) {
                 if (cb==null) {
@@ -142,27 +122,22 @@
                     options=null;
                 }
                 if (options!=null && typeof options != 'object') options = {encoding: options};
-                const req = createCMDRequest(true);
-                req.onreadystatechange = function() {
-                    if (this.readyState == 4) {
-                        if (req.status == 200) {
-                            cb();
-                        }
+                $e_node.asyncFSWriteFile({"path":path, "data": data, options:options}, data).then((e, r)=>{
+                    if (e!==null) {
+                        throw "writeFile failed: "+path;
+                    } else {
+                        cb();
                     }
-                };
-                if (options==null || options.encoding==null) {
-                    data = btoa(data);
-                }
-                req.send(JSON.stringify(wrapInvoke({"command":"FSWriteFile", "path":path, "data": data, options:options})));
+                });
             },
             readFileSync(path, options) {
                 if (options!=null && typeof options != 'object') options = {encoding: options};
-                const req = createCMDRequest(false);
-                req.send(JSON.stringify(wrapInvoke({"command":"FSReadFile", "path":path, options:options})));
+                let {r, e} = $e_node.syncFSReadFile({"path":path, options:options});
+                if (e!=null) throw "readFileSync failed: "+path;
                 if (options==null || options.encoding==null) {
-                    return Buffer.from(req.response);
+                    return Buffer.from(r);
                 }
-                return req.responseText;
+                return r;
             },
             readFile(path, options, cb) {
                 if (cb==null) {
@@ -170,27 +145,23 @@
                     options=null;
                 }
                 if (options!=null && typeof options != 'object') options = {encoding: options};
-                const req = createCMDRequest(true);
-                req.onreadystatechange = function() {
-                    if (this.readyState == 4) {
-                        if (req.status == 200) {
-                            if (options==null || options.encoding==null) {
-                                cb(null, Buffer.from(req.response));
-                            } else {
-                                cb(null, req.responseText);
-                            }
+                $e_node.asyncFSReadFile({"path":path, options:options}).then((e, r)=>{
+                    if (e!==null) {
+                        cb(e);
+                    } else {
+                        if (options==null || options.encoding==null) {
+                            cb(null, Buffer.from(r));
                         } else {
-                            cb(req.responseText);
+                            cb(null, r);
                         }
                     }
-                };
-                req.send(JSON.stringify(wrapInvoke({"command":"FSReadFile", "path":path, options:options})));
+                });
             },
             readdirSync(path, options) {
                 if (options!=null && typeof options != 'object') options = {encoding: options};
-                const req = createCMDRequest(false);
-                req.send(JSON.stringify(wrapInvoke({"command":"FSReadDir", "path":path, options:options})));
-                let dirents = JSON.parse(req.responseText);
+                let {r, e} = $e_node.syncFSReadDir({"path":path, options:options});
+                if (e!=null) throw "readdirSync failed: "+path;
+                let dirents = JSON.parse(r);
                 if (options==null || !options.withFileTypes) {
                     let names = [];
                     for (let de of dirents) {
@@ -211,28 +182,20 @@
                 if (mode==null) mode="0o666";
                 if (flags==null) flags="r";
                 _fd++;
-                const req = createCMDRequest(true);
-                req.send(JSON.stringify(wrapInvoke({"command":"FSOpen", fd:_fd, "path":path, "flags":flags.toLowerCase(), "mode":mode})));
-                req.onreadystatechange = function() {
-                    if (this.readyState == 4) {
-                        if (req.status == 200) {
-                            cb(null, req.responseText*1);
-                        } else {
-                            cb(req.responseText);
-                        }
+                $e_node.asyncFSOpen({fd:_fd, "path":path, "flags":flags.toLowerCase(), "mode":mode}).then((e, r)=>{
+                    if (e!==null) {
+                        cb(e);
+                    } else {
+                        cb(null, r*1);
                     }
-                };
+                });
             },
             close(fd, cb) {
-                const req = createCMDRequest(true);
-                req.send(JSON.stringify(wrapInvoke({"command":"FSClose", "fd":fd})));
-                req.onreadystatechange = function() {
-                    if (this.readyState == 4) {
-                        if (req.status != 200 && cb!=null) {
-                            cb(req.responseText);
-                        }
+                $e_node.asyncFSClose({"fd":fd}).then((e, r)=>{
+                    if (e!==null) {
+                        cb(e);
                     }
-                };
+                });
             },
             read(fd, ...args) {
                 let buffer, offset=0, length, position, cb;
@@ -257,20 +220,16 @@
                     }
                     length = buffer.byteLength-offset;
                 }
-                const req = createCMDRequest(true);
-                req.send(JSON.stringify(wrapInvoke({"command":"FSRead", "fd":fd, "offset":offset, "length":length, "position":position})));
-                req.onreadystatechange = function() {
-                    if (this.readyState == 4) {
-                        if (req.status == 200) {
-                            let br = Buffer.from(req.response);
-                            let bytesRead = Math.min(br.byteLength, buffer.byteLength);
-                            br.copy(buffer, 0, 0, bytesRead);
-                            cb(null, bytesRead, buffer);
-                        } else {
-                            cb(req.responseText);
-                        }
+                $e_node.asyncFSRead({"fd":fd, "offset":offset, "length":length, "position":position}).then((e, r)=>{
+                    if (e!==null) {
+                        cb(e);
+                    } else {
+                        let br = Buffer.from(r);
+                        let bytesRead = Math.min(br.byteLength, buffer.byteLength);
+                        br.copy(buffer, 0, 0, bytesRead);
+                        cb(null, bytesRead, buffer);
                     }
-                };
+                });
             },
             write(fd, ...args) {
                 let buffer, offset=0, length, position, cb;
@@ -299,27 +258,32 @@
                     offset=options.offset || offset; length=options.length || length; position=options.position || position;
                 }
                 length = buffer.byteLength-offset;
-                
-                let data = buffer.toString('base64');
-                const req = createCMDRequest(true);
-                req.send(JSON.stringify(wrapInvoke({"command":"FSWrite", "fd":fd, "data": data,"offset":offset, "length":length, "position":position})));
-                req.onreadystatechange = function() {
-                    if (this.readyState == 4) {
-                        if (req.status == 200) {
-                            let written = req.responseText*1;
-                            cb(null, written, args[0]);
-                        } else {
-                            cb(req.responseText);
-                        }
+                $e_node.asyncFSWrite({"fd":fd,"offset":offset, "length":length, "position":position}, buffer).then((e, r)=>{
+                    if (e!==null) {
+                        cb(e);
+                    } else {
+                        let written = r*1;
+                        cb(null, written, args[0]);
                     }
-                };
+                });
+            },
+            realpath: (path, options, cb) => {
+                if (cb==null) {
+                    cb = options;
+                    options=null;
+                }
+                let {r, e} = $e_node.syncFSRealPath({"path":path});
+                if (e!=null) throw "realpath failed: "+path;
+                cb(null, r);
+            },
+            fdatasync: (fd, cb) => {
+                $e_node.asyncFSFdatasync({"fd":fd});
             },
             watch(path, options, cb) {
-                const req = createCMDRequest(false);
                 let wid = uuidv4();
-                req.send(JSON.stringify(wrapInvoke({"command":"FSWatch", wid:wid, "path":path, options:options})));
-                if (req.responseText.startsWith("Error: ")) {
-                    throw "fs.watch error: "+req.responseText.substring(7);
+                let {r, e} = $e_node.syncFSWatch({wid:wid, "path":path, options:options});
+                if (e!=null) {
+                    throw "fs.watch error: "+e;
                 }
                 class WatcherCls extends EventEmitter {
                     constructor() {
@@ -345,8 +309,7 @@
                             }
                         }
                         this.close = () => {
-                            const req = createCMDRequest(true);
-                            req.send(JSON.stringify(wrapInvoke({"command":"FSWatchClose", "wid":wid})));
+                            $e_node.asyncFSWatchClose({wid:wid});
                         }
                     }
                 }
@@ -419,12 +382,11 @@
         },
         child_process: {
             spawn: function(cmd, args, options) {
-                let req = createCMDRequest(false);
-                req.send(JSON.stringify(wrapInvoke({"command":"ChildProcessSpawn", cmd:cmd, args:args})));
-                if (req.responseText.startsWith("Error: ")) {
-                    throw "child_process.spawn error: "+req.responseText.substring(7);
+                let {r, e} = $e_node.syncChildProcessSpawn({cmd:cmd, args:args});
+                if (e!=null) {
+                    throw "child_process.spawn error: "+e;
                 }
-                let pid = req.responseText;
+                let pid = r;
                 let proc = {
                     pid: pid,
                     on: {},
@@ -432,10 +394,9 @@
                     stderr_on: {},
                     stdin: {
                         write: (data) => {
-                            let req = createCMDRequest(false);
-                            req.send(JSON.stringify(wrapInvoke({"command":"ChildProcessStdinWrite", pid: pid, data:data})));
-                            if (req.responseText!="OK") {
-                                throw "child_process.stdin.write error: "+req.responseText;
+                            let {r, e} = $e_node.syncChildProcessStdinWrite({pid: pid}, data);
+                            if (e!=null) {
+                                throw "child_process.stdin.write error: "+e;
                             }
                         }
                     },
@@ -453,10 +414,9 @@
                         proc.on[event] = cb;
                     },
                     disconnect: () => {
-                        let req = createCMDRequest(false);
-                        req.send(JSON.stringify(wrapInvoke({"command":"ChildProcessDisconnect", pid: pid})));
-                        if (req.responseText!="OK") {
-                            throw "child_process.disconnect error: "+req.responseText;
+                        let {r, e} = $e_node.syncChildProcessDisconnect({pid: pid});
+                        if (e!=null) {
+                            throw "child_process.disconnect error: "+e;
                         }
                     }
                 };
@@ -467,17 +427,15 @@
         os: {
             homedir: () => {
                 if (window.__electrico.homedir==null) {
-                    const req = createCMDRequest(false);
-                    req.send(JSON.stringify({"action":"Electron", invoke:{"command":"GetAppPath", "path":"userHome"}}));
-                    window.__electrico.homedir = req.responseText;
+                    let {r, e} = $e_electron.syncGetAppPath({ "path":"userHome"});
+                    window.__electrico.homedir = r;
                 }
                 return window.__electrico.homedir;
             },
             tmpdir: () => {
                 if (window.__electrico.tmpdir==null) {
-                    const req = createCMDRequest(false);
-                    req.send(JSON.stringify({"action":"Electron", invoke:{"command":"GetAppPath", "path":"temp"}}));
-                    window.__electrico.tmpdir = req.responseText;
+                    let {r, e} = $e_electron.syncGetAppPath({ "path":"temp"});
+                    window.__electrico.tmpdir = r;
                 }
                 return window.__electrico.tmpdir;
             }
@@ -522,31 +480,156 @@
             }
         },
         net: {
-            // TODO
-            Server: {
-                
+            createServer: function(options, listener) {
+                if (listener==null) {
+                    listener=options;
+                    options=null;
+                }
+                class ServerCls extends EventEmitter {
+                    constructor() {
+                        super();
+                        this._connections={};
+                        this.listen = ((hook, cb) => {
+                            if (cb!=null) {
+                                this.on("listening", cb);
+                            }
+                            let {r, e} = $e_node.syncNETCreateServer({"hook":hook, "options":options});
+                            if (e==null) {
+                                window.__electrico.net_server[hook]=this;
+                                this.id=r;
+                                this.emit("listening");
+                            } else {
+                                this.emit("error", e);
+                            }
+                        }).bind(this);
+                        this.close = ((cb) => {
+                            for (let cid in this._connections) {
+                                let {r, e} = $e_node.syncNETCloseConnection({"id":cid});
+                                this._connections[cid].emit("close");
+                                delete window.__electrico.net_server[cid];
+                            }
+                            let {r, e} = $e_node.syncNETCloseServer({"id":this.id});
+                            this._connections={};
+                            for (let id in window.__electrico.net_server) {
+                                if (window.__electrico.net_server[id]==this) {
+                                    delete window.__electrico.net_server[id];
+                                }
+                            }
+                            this.emit("close");
+                            if (cb!=null) cb();
+                        }).bind(this);
+                        this._connection_start = (id => {
+                            class ConnectionCls extends EventEmitter {
+                                constructor(server) {
+                                    super();
+                                    server._connections[id] = this;
+                                    this.write = ((data, encoding, cb) => {
+                                        if (cb==null) {
+                                            cb=encoding;
+                                            encoding=null;
+                                        }
+                                        encoding = encoding || 'utf-8';
+                                        if (!Buffer.isBuffer(data)) {
+                                            data=Buffer.from(data, encoding);
+                                        }
+                                        $e_node.asyncNETWriteConnection({"id":id}, data).then((e, r)=>{
+                                            if (cb!=null) cb(e==null);
+                                        });
+                                    }).bind(this);
+                                    this.end = ((data, encoding, cb) => {
+                                        cb = cb || encoding;
+                                        let end = () => {
+                                            setTimeout(()=>{
+                                                let {r, e} = $e_node.syncNETCloseConnection({"id":id});
+                                            }, 100);
+                                        };
+                                        if (data!=null) {
+                                            this.write(data, encoding, ()=>{
+                                                end();
+                                            });
+                                        } else {
+                                            end();
+                                        }
+                                    }).bind(this);
+                                    this._connection_end = (id => {
+                                        this.emit("end");
+                                        delete server._connections[id];
+                                        delete window.__electrico.net_server[id];
+                                    }).bind(this);
+                                }
+                            }
+                            let connection = new ConnectionCls(this);
+                            window.__electrico.net_server[id] = connection;
+                            this.emit("connection", connection);
+                        }).bind(this);
+                    }
+                }
+                let server = new ServerCls();
+                if (listener!=null) {
+                    server.on("connection", listener);
+                }
+                return server;
             },
-            Socket: {
-            },
-            createServer: {
-
-            },
-            createConnection: {
-
+            createConnection: function (hook, listener) {
+                class ConnectionCls extends EventEmitter {
+                    constructor() {
+                        super();
+                        this.write = ((data, encoding, cb) => {
+                            if (cb==null) {
+                                cb=encoding;
+                                encoding=null;
+                            }
+                            encoding = encoding || 'utf-8';
+                            if (!Buffer.isBuffer(data)) {
+                                data=Buffer.from(data, encoding);
+                            }
+                            $e_node.asyncNETWriteConnection({"id":id}, data).then((e, r)=>{
+                                if (cb!=null) cb(e==null);
+                            });
+                        }).bind(this);
+                        this.end = ((data, encoding, cb) => {
+                            cb = cb || encoding;
+                            let end = () => {
+                                setTimeout(()=>{
+                                    let {r, e} = $e_node.syncNETCloseConnection({"id":id});
+                                }, 100);
+                            };
+                            if (data!=null) {
+                                this.write(data, encoding, ()=>{
+                                    end();
+                                });
+                            } else {
+                                end();
+                            }
+                        }).bind(this);
+                        this._connection_end = (id => {
+                            this.emit("end");
+                            delete window.__electrico.net_server[id];
+                        }).bind(this);
+                    }
+                }
+                let id = uuidv4();
+                let connection = new ConnectionCls();
+                if (listener!=null) {
+                    connection.on("connect", listener);
+                }
+                window.__electrico.net_server[id] = connection;
+                let {r, e} = $e_node.syncNETCreateConnection({"id":id, "hook":hook});
+                if (e!=null) {
+                    console.error("createConnection error: ", e);
+                    setTimeout(()=>{
+                        connection.emit("error", e);
+                    }, 0);
+                } else {
+                    setTimeout(()=>{
+                        connection.emit("connect");
+                    }, 0);
+                }
+                return connection;
             }
         },
         zlib :{
-            // TODO
             createDeflateRaw: {
-
-            },
-            ZlibOptions: {
-
-            },
-            InflateRaw: {
-
-            },
-            DeflateRaw: {
 
             },
             createInflateRaw: {

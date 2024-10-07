@@ -61,6 +61,11 @@ impl FSStat {
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
+pub struct NETOptions {
+  
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
 #[serde(tag = "command")]
 pub enum NodeCommand {
   ConsoleLog {params: ConsoleLogParam},
@@ -71,17 +76,25 @@ pub enum NodeCommand {
   FSMkdir {path:String, options:Option<FSOptions>},
   FSReadFile {path:String, options:Option<FSOptions>},
   FSReadDir {path:String, options:Option<FSOptions>},
-  FSWriteFile {path:String, data:String, options:Option<FSOptions>},
+  FSWriteFile {path:String, options:Option<FSOptions>},
   FSWatch {path:String, wid:String, options:Option<FSOptions>},
   FSWatchClose {wid:String},
   FSOpen {fd:i64, path:String, flags:String, mode:String},
   FSClose {fd:i64},
   FSRead {fd:i64, offset:i64, length:usize, position:Option<u64>},
-  FSWrite {fd:i64, data:String, offset:i64, length:usize, position:Option<u64>},
+  FSWrite {fd:i64, offset:i64, length:usize, position:Option<u64>},
+  FSRealPath {path:String},
+  FSFdatasync {fd:i64},
+  NETCreateServer {hook:String, options: Option<NETOptions>},
+  NETCloseServer {id:String},
+  NETCloseConnection {id:String},
+  NETCreateConnection {hook:String, id:String},
+  NETWriteConnection {id:String},
   HTTPRequest {options:HTTPOptions},
   ChildProcessSpawn {cmd: String, args:Option<Vec<String>>},
-  ChildProcessStdinWrite {pid: String, data:String},
-  ChildProcessDisconnect {pid: String}
+  ChildProcessStdinWrite {pid: String},
+  ChildProcessDisconnect {pid: String},
+  GetDataBlob {id: String}
 }
 
 #[derive(Default)]

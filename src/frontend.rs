@@ -39,8 +39,8 @@ impl Frontend {
     pub fn new(rsrc_dir:PathBuf) -> Frontend {
         let mut frontendalljs:String = String::new();
         const JS_DIR_SHARED: Dir = include_dir!("src/js/shared");
-        frontendalljs = append_js_scripts(frontendalljs, JS_DIR_SHARED);
-        frontendalljs = append_js_scripts(frontendalljs, JS_DIR_FRONTEND);
+        frontendalljs = append_js_scripts(frontendalljs, JS_DIR_SHARED, Some(".js"));
+        frontendalljs = append_js_scripts(frontendalljs, JS_DIR_FRONTEND, Some("electrico.js"));
         Frontend {
             window_ids:HashMap::new(),
             windows:HashMap::new(),
@@ -69,7 +69,7 @@ impl Frontend {
                                 respond_status(StatusCode::FORBIDDEN, CONTENT_TYPE_TEXT.to_string(), "forbidden".to_string().into_bytes(), responder);
                                 return;
                             }
-                            let _ = ipc_proxy.send_event(ElectricoEvents::ExecuteCommand{command:Command::PostIPC {browser_window_id:ipc_handler_id.clone(), request_id, params}, responder});
+                            let _ = ipc_proxy.send_event(ElectricoEvents::ExecuteCommand{command:Command::PostIPC {browser_window_id:ipc_handler_id.clone(), request_id, params}, responder, data_blob:None});
                         },
                         FrontendCommand::GetProcessInfo {nonce} => {
                             if nonce!=ipc_handler_id {
@@ -77,13 +77,13 @@ impl Frontend {
                                 respond_status(StatusCode::FORBIDDEN, CONTENT_TYPE_TEXT.to_string(), "forbidden".to_string().into_bytes(), responder);
                                 return;
                             }
-                            let _ = ipc_proxy.send_event(ElectricoEvents::ExecuteCommand{command:Command::Node { invoke: crate::node::types::NodeCommand::GetProcessInfo }, responder});
+                            let _ = ipc_proxy.send_event(ElectricoEvents::ExecuteCommand{command:Command::Node { invoke: crate::node::types::NodeCommand::GetProcessInfo }, responder, data_blob:None});
                         },
                         FrontendCommand::DOMContentLoaded {title } => {
-                            let _ = ipc_proxy.send_event(ElectricoEvents::ExecuteCommand{command:Command::DOMContentLoaded {browser_window_id:ipc_handler_id.clone(), title}, responder});
+                            let _ = ipc_proxy.send_event(ElectricoEvents::ExecuteCommand{command:Command::DOMContentLoaded {browser_window_id:ipc_handler_id.clone(), title}, responder, data_blob:None});
                         },
                         FrontendCommand::Alert {message } => {
-                            let _ = ipc_proxy.send_event(ElectricoEvents::ExecuteCommand{command:Command::Electron { invoke: crate::electron::types::ElectronCommand::ShowMessageBoxSync { options: ShowMessageBoxOptions::new(message) } }, responder});
+                            let _ = ipc_proxy.send_event(ElectricoEvents::ExecuteCommand{command:Command::Electron { invoke: crate::electron::types::ElectronCommand::ShowMessageBoxSync { options: ShowMessageBoxOptions::new(message) } }, responder, data_blob:None});
                         }
                       }
                     }
@@ -184,7 +184,7 @@ impl Frontend {
                 browser_window_id:fil_handler_id.clone(), 
                 file_path: fpath, 
                 module:is_module_request(request.uri().host())
-            }, responder});
+            }, responder, data_blob:None});
         };
 
         let mut is_windows="false";

@@ -15,14 +15,12 @@ category = "App"
 short_description = "Lightweight Electron 'compatible' App Container."
 long_description = """
 """
-[dependencies.uuid]
-version = "1.3.0"
 
 [dependencies]
 log = {version = "0.4.22"}
 env_logger = {version = "0.11.5"}
 include_dir = {version = "0.7.3"}
-wry = { version = "0.44.1", features = ["linux-body"]}
+wry = { version = "0.45.0", features = ["linux-body"]}
 tao = { version = "0.30.2"}
 muda = {version = "0.15.0"}
 serde_json = { version = "1.0.128"}
@@ -30,7 +28,7 @@ json_comments = {version = "0.2.2"}
 serde = {version = "1.0.210"}
 rfd = {version="0.15.0"}
 tokio = {version = "1.40.0", features = ["full"]}
-reqwest = {version = "0.12.7"}
+reqwest = {version = "0.12.8"}
 substring = {version = "1.4.5"}
 open = {version = "5.3.0"}
 mime_guess = {version = "2.0.5"}
@@ -38,6 +36,10 @@ lazy_static = {version = "1.5.0"}
 base64 = {version = "0.22.1"}
 directories = {version = "5.0.1"}
 notify = {version = "6.1.1"}
+interprocess = {version = "2.2.1", features = ["tokio"]}
+uuid = { version = "1.10.0", features = ["v4"]}
+urlencoding = {version = "2.1.3"}
+queues = {version = "1.1.0"}
 
 [target."cfg(any(target_os = \"linux\", target_os = \"dragonfly\", target_os = \"freebsd\", target_os = \"openbsd\", target_os = \"netbsd\"))".dependencies]
 webkit2gtk = { version = "=2.0.1", features = [ "v2_40" ]}

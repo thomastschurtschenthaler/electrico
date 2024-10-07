@@ -31,72 +31,57 @@
                     this.id=id;
                 }
                 openDevTools() {
-                    const req = createCMDRequest(true);
-                    req.send(JSON.stringify(wrapInvoke({"command":"BrowserWindowDevTools", "params":{"id":this.id, "call": "Open"}}))); 
+                    $e_electron.asyncBrowserWindowDevTools({"params":{"id":this.id, "call": "Open"}});
                 }
                 closeDevTools() {
-                    const req = createCMDRequest(true);
-                    req.send(JSON.stringify(wrapInvoke({"command":"BrowserWindowDevTools", "params":{"id":this.id, "call": "Close"}}))); 
+                    $e_electron.asyncBrowserWindowDevTools({"params":{"id":this.id, "call": "Close"}});
                 }
                 executeJavaScript (script) {
-                    const req = createCMDRequest(true);
-                    req.send(JSON.stringify(wrapInvoke({"command":"ExecuteJavascript", "id":this.id, "script":script}))); 
+                    $e_electron.asyncExecuteJavascript({"id":this.id, "script":script});
                 }
                 printToPDF (options) {
-                    const req = createCMDRequest(false);
-                    req.send(JSON.stringify(wrapInvoke({"command":"PrintToPDF", "id":this.id})));
+                    $e_electron.syncPrintToPDF({"id":this.id});
                     return "";
                 }
                 send (channel, ...args) {
-                    const req = createCMDRequest(true);
-                    req.send(JSON.stringify(wrapInvoke({"command":"ChannelSendMessage", "id":this.id, "channel":channel, "args":JSON.stringify(args)}))); 
+                    $e_electron.asyncChannelSendMessage({"id":this.id, "channel":channel, "args":JSON.stringify(args)});
                 }
             }
             this.webContents = new WebContentsCls(this.id);
             this.getContentBounds = (() => {
-                const req = createCMDRequest(false);
-                req.send(JSON.stringify(wrapInvoke({"command":"BrowserWindowBounds", "id":this.id, "params": {"method": "Get"}})));
-                return JSON.parse(req.responseText);
+                let {r, e} = $e_electron.syncBrowserWindowBounds({"id":this.id, "params": {"method": "Get"}});
+                return JSON.parse(r);
             }).bind(this);
             this.setContentBounds = ((bounds , animate) => {
-                const req = createCMDRequest(true);
-                req.send(JSON.stringify(wrapInvoke({"command":"BrowserWindowBounds", "id":this.id, "params": {"method":"Set", "bounds":bounds}})));
+                $e_electron.asyncBrowserWindowBounds({"id":this.id, "params": {"method":"Set", "bounds":bounds}});
             }).bind(this);
             this.isMaximized = (() => {
-                const req = createCMDRequest(false);
-                req.send(JSON.stringify(wrapInvoke({"command":"BrowserWindowMaximized", "id":this.id, "params": {"method": "Get"}})));
-                return req.responseText=="true";
+                let {r, e} = $e_electron.syncBrowserWindowMaximized({"id":this.id, "id":this.id, "params": {"method": "Get"}});
+                return r=="true";
             }).bind(this);
             this.maximize = (() => {
-                const req = createCMDRequest(true);
-                req.send(JSON.stringify(wrapInvoke({"command":"BrowserWindowMaximized", "id":this.id, "params": {"method":"Set", "maximized":true}})));
+                $e_electron.asyncBrowserWindowMaximized({"id":this.id, "params": {"method":"Set", "maximized":true}});
             }).bind(this);
             this.unmaximize = (() => {
-                const req = createCMDRequest(true);
-                req.send(JSON.stringify(wrapInvoke({"command":"BrowserWindowMaximized", "id":this.id, "params": {"method":"Set", "maximized":false}})));
+                $e_electron.asyncBrowserWindowMaximized({"id":this.id, "params": {"method":"Set", "maximized":false}});
             }).bind(this);
             this.isMinimized = (() => {
-                const req = createCMDRequest(false);
-                req.send(JSON.stringify(wrapInvoke({"command":"BrowserWindowMinimized", "id":this.id, "params": {"method": "Get"}})));
-                return req.responseText=="true";
+                let {r, e} = $e_electron.syncBrowserWindowMinimized({"id":this.id, "id":this.id, "params": {"method": "Get"}});
+                return r=="true";
             }).bind(this);
             this.minimize = (() => {
-                const req = createCMDRequest(true);
-                req.send(JSON.stringify(wrapInvoke({"command":"BrowserWindowMinimized", "id":this.id, "params": {"method":"Set", "minimized":true}})));
+                $e_electron.asyncBrowserWindowMinimized({"id":this.id, "params": {"method":"Set", "minimized":true}});
             }).bind(this);
             this.close = (() => {
                 window.__electrico.callAppOn("window-close", this.id);
             }).bind(this);
             this.show = (() => {
-                const req = createCMDRequest(true);
-                req.send(JSON.stringify(wrapInvoke({"command":"BrowserWindowShow", "id":this.id, "shown":true}))); 
+                $e_electron.asyncBrowserWindowShow({"id":this.id, "id":this.id, "shown":true});
             }).bind(this);
             this.hide = (() => {
-                const req = createCMDRequest(true);
-                req.send(JSON.stringify(wrapInvoke({"command":"BrowserWindowShow", "id":this.id, "shown":false}))); 
+                $e_electron.asyncBrowserWindowShow({"id":this.id, "id":this.id, "shown":false});
             }).bind(this);
             window.__electrico.browser_window[this.id]=this;
-            const req = createCMDRequest(false);
             this.config.title = this.config.title || "Electrico Window";
             this.config.resizable = this.config.resizable!=null?this.config.resizable:true;
             this.config.modal = this.config.modal!=null?this.config.modal:false;
@@ -110,16 +95,14 @@
             if (this.config.webPreferences.contextIsolation==null) {
                 this.config.webPreferences.contextIsolation=true;
             }
-            req.send(JSON.stringify(wrapInvoke({"command":"BrowserWindowCreate", "params":{"id":this.id, "config": this.config}}))); 
+            let {r, e} = $e_electron.syncBrowserWindowCreate({"id":this.id, "params":{"id":this.id, "config": this.config}});
         }
         
         loadFile(file) {
-            const req = createCMDRequest(true);
-            req.send(JSON.stringify(wrapInvoke({"command":"BrowserWindowLoadfile", "params":{"id":this.id, "file":file, "config": this.config}}))); 
+            $e_electron.asyncBrowserWindowLoadfile({"params":{"id":this.id, "file":file, "config": this.config}});
         }
         loadURL(url) {
-            const req = createCMDRequest(true);
-            req.send(JSON.stringify(wrapInvoke({"command":"BrowserWindowLoadfile", "params":{"id":this.id, "file":url, "config": this.config}}))); 
+            $e_electron.asyncBrowserWindowLoadfile({"params":{"id":this.id, "file":url, "config": this.config}});
         }
         removeMenu = () => {
             console.log("BrowserWindow.removeMenu");
@@ -162,25 +145,22 @@
             }
             setTimeout(()=>{
                 this.emit("ready");
-            }, 0);
+            }, 1000);
         }
         setName (name) {
             window.__electrico.app.name=name;
-            const req = createCMDRequest(true);
-            req.send(JSON.stringify(wrapInvoke({"command":"AppSetName", "name": name})));
+            $e_electron.asyncAppSetName({"name": name});
         }
         getName() {
             return window.__electrico.app.name;
         }
         getAppPath() {
-            const req = createCMDRequest(false);
-            req.send(JSON.stringify(wrapInvoke({"command":"GetAppPath"})));
-            return req.responseText;
+            let {r, e} = $e_electron.syncGetAppPath();
+            return r;
         }
         getPath(path) {
-            const req = createCMDRequest(false);
-            req.send(JSON.stringify(wrapInvoke({"command":"GetAppPath", "path":path})));
-            return req.responseText;
+            let {r, e} = $e_electron.syncGetAppPath({"path":path});
+            return r;
         }
         whenReady () {
             return {
@@ -190,16 +170,14 @@
             };
         }
         quit() {
-            const req = createCMDRequest(true);
-            req.send(JSON.stringify(wrapInvoke({"command":"AppQuit", "exit":false})));
+            $e_electron.asyncAppQuit({"exit":false});
         }
         exit() {
-            const req = createCMDRequest(true);
-            req.send(JSON.stringify(wrapInvoke({"command":"AppQuit", "exit":true})));
+            $e_electron.asyncAppQuit({"exit":true});
         }
         getVersion(){
-            const req = createCMDRequest(false);
-            req.send(JSON.stringify(wrapInvoke({"command":"GetAppVersion"})));
+            let {r, e} = $e_electron.syncGetAppVersion();
+            return r;
         }
         requestSingleInstanceLock(ad) {
             return true;
@@ -246,8 +224,7 @@
             },
             setApplicationMenu(menu) {
                 window.__electrico.app_menu.menu=menu;
-                const req = createCMDRequest(true);
-                req.send(JSON.stringify(wrapInvoke({"command":"SetApplicationMenu", "menu": menu})));
+                $e_electron.asyncSetApplicationMenu({"menu": menu});
             },
             getApplicationMenu() {
                 return window.__electrico.app_menu.menu;
@@ -255,10 +232,6 @@
         },
         screen: {
             getPrimaryDisplay: () => {
-                /*const req = createCMDRequest(false);
-                req.send(JSON.stringify(wrapInvoke({"command":"GetPrimaryDisplay"})));
-                let res = JSON.parse(req.responseText);
-                return res!=null?JSON.parse(req.responseText):undefined;*/
                 return {
                     bounds: {
                         width:window.screen.width,
@@ -285,10 +258,8 @@
                     options=win;
                     win=null;
                 }
-                const req = createCMDRequest(false);
-                req.send(JSON.stringify(wrapInvoke({"command":"ShowOpenDialogSync", options:options})));
-                let res = JSON.parse(req.responseText);
-                return res!=null?JSON.parse(req.responseText):undefined;
+                let {r, e} = $e_electron.syncShowOpenDialogSync({options:options});
+                return JSON.parse(r);
             },
             showOpenDialog: (win, options) => {
                 if (options==null) {
@@ -296,16 +267,12 @@
                     win=null;
                 }
                 return new Promise(resolve => {
-                    const req = createCMDRequest(true);
-                    req.onreadystatechange = function() {
-                        if (this.readyState == 4) {
-                            if (req.status == 200) {
-                                let res = JSON.parse(req.responseText);
-                                resolve({"canceled": res==null, "filePaths":res});
-                            } else throw "showOpenDialog failed: "+req.status;
-                        }
-                    };
-                    req.send(JSON.stringify(wrapInvoke({"command":"ShowOpenDialog", "window_id": win!=null?win.id:null, options:options})));
+                    $e_electron.asyncShowOpenDialog({"window_id": win!=null?win.id:null, options:options}).then((e, r)=>{
+                        if (e!=null) {
+                            let res = JSON.parse(r);
+                            resolve({"canceled": res==null, "filePaths":res});
+                        } else throw "showOpenDialog failed: "+e;
+                    });
                 });
             },
             showSaveDialogSync: (win, options) => {
@@ -313,10 +280,8 @@
                     options=win;
                     win=null;
                 }
-                const req = createCMDRequest(false);
-                req.send(JSON.stringify(wrapInvoke({"command":"ShowSaveDialogSync", options:options})));
-                let res = JSON.parse(req.responseText);
-                return res!=""?req.responseText:undefined;
+                let {r, e} = $e_electron.syncShowSaveDialogSync({options:options});
+                JSON.parse(r);
             },
             showSaveDialog: (win, options) => {
                 if (options==null) {
@@ -324,17 +289,12 @@
                     win=null;
                 }
                 return new Promise(resolve => {
-                    const req = createCMDRequest(true);
-                    req.onreadystatechange = function() {
-                        if (this.readyState == 4) {
-                            if (req.status == 200) {
-                                let res = req.responseText;
-                                console.log("showSaveDialog response", res);
-                                resolve({"canceled": res=="", "filePath":res});
-                            } else throw "showSaveDialog failed: "+req.status;
-                        }
-                    };
-                    req.send(JSON.stringify(wrapInvoke({"command":"ShowSaveDialog", "window_id": win!=null?win.id:null, options:options})));
+                    $e_electron.asyncShowSaveDialog({"window_id": win!=null?win.id:null, options:options}).then((e, r)=>{
+                        if (e!=null) {
+                            let res = JSON.parse(r);
+                            resolve({"canceled": res==null, "filePaths":res});
+                        } else throw "showOpenDialog failed: "+e;
+                    });
                 });
             },
             showMessageBoxSync: (win, options) => {
@@ -342,20 +302,16 @@
                     options=win;
                     win=null;
                 }
-                const req = createCMDRequest(false);
-                req.send(JSON.stringify(wrapInvoke({"command":"ShowMessageBoxSync", options:options})));
-                let res = JSON.parse(req.responseText);
-                return res!=null?JSON.parse(req.responseText):undefined;
+                let {r, e} = $e_electron.syncShowMessageBoxSync({options:options});
+                JSON.parse(r);
             }
         },
         shell: {
             openExternal: (url, options) => {
-                const req = createCMDRequest(true);
-                req.send(JSON.stringify(wrapInvoke({"command":"ShellOpenExternal", url:url})));
+                $e_electron.asyncShellOpenExternal({url:url});
             },
             openPath: (path, options) => {
-                const req = createCMDRequest(true);
-                req.send(JSON.stringify(wrapInvoke({"command":"ShellOpenExternal", url:path})));
+                $e_electron.asyncShellOpenExternal({url:path});
             }
         },
         protocol: {
@@ -377,7 +333,6 @@
     var {Buffer} = require("buffer");
     window.Buffer=Buffer;
 
-    const req = createCMDRequest(false);
-    req.send(JSON.stringify(wrapInvoke({"command":"GetAppPath"})));
-    window.__electrico.appPath = req.responseText;
+    let {r, e} = $e_electron.syncGetAppPath();
+    window.__electrico.appPath = r;
 })();

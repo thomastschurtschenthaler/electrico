@@ -21,10 +21,14 @@
             return new Proxy({}, {
                 get(target, prop, receiver) {
                     if (_processInfo==null) {
-                        const req = new _XMLHttpRequest();
-                        req.open("POST", window.__create_protocol_url("ipc://ipc/send"), false);
-                        req.send(JSON.stringify({"action":"GetProcessInfo", "nonce":nonce}));
-                        _processInfo = JSON.parse(req.responseText);
+                        if (nonce!=null) {
+                            const req = new _XMLHttpRequest();
+                            req.open("POST", window.__create_protocol_url("ipc://ipc/send"), false);
+                            req.send(JSON.stringify({"action":"GetProcessInfo", "nonce":nonce}));
+                            _processInfo = JSON.parse(req.responseText);
+                        } else {
+                            _processInfo = {};
+                        }
                     }
                     if (prop=="on") {
                         return (event, f) => {
@@ -51,6 +55,7 @@
             });
         }
         window.process = processi(__electrico_nonce);
+       
         let _electron_i = {};
         
         let _electron = function(nonce) {
@@ -142,14 +147,15 @@
             before: (nonce) => {
                 window.addEventListener = (e, h) => {
                     _addEventListener(e, (e)=>{
-                        process=processi(nonce);
-                        h(e);
+                        let process=processi(nonce);
+                        let he = "("+h.toString()+")(e)";
+                        eval(he);
                     })
                 };
             },
             after: () => {
                 window.addEventListener=_addEventListener;
-                delete window.process;
+                window.process=processi(null);
             }
         });
         //setTimeout(()=>{window.__electrico_preload(document);}, 1000);
