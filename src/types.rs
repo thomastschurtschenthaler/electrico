@@ -17,7 +17,9 @@ pub struct Package {
 
 pub enum ChildProcess {
   StdinWrite {data: Vec<u8>},
-  Disconnect
+  Disconnect,
+  StdoutEnd,
+  StderrEnd
 }
 
 pub enum NETConnection {
