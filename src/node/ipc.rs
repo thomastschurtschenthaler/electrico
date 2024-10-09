@@ -147,7 +147,7 @@ fn ipc_connect(id:&String, c:interprocess::local_socket::tokio::Stream,
         }
         trace!("NETConnection write end {}", w_id);
     });
-    let mut buffer:Vec<u8> = vec![0; 1024];
+    let mut buffer:Vec<u8> = vec![0; 65536];
     tokio::spawn(async move {
         loop {
             trace!("NETConnection::read loop {}", r_id);
