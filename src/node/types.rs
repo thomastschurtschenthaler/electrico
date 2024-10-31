@@ -85,6 +85,8 @@ pub enum NodeCommand {
   FSWrite {fd:i64, offset:i64, length:usize, position:Option<u64>},
   FSRealPath {path:String},
   FSFdatasync {fd:i64},
+  FSUnlink {path:String},
+  FSRename {old_path:String, new_path:String},
   NETCreateServer {hook:String, options: Option<NETOptions>},
   NETCloseServer {id:String},
   NETCloseConnection {id:String},
@@ -94,7 +96,8 @@ pub enum NodeCommand {
   ChildProcessSpawn {cmd: String, args:Option<Vec<String>>},
   ChildProcessStdinWrite {pid: String},
   ChildProcessDisconnect {pid: String},
-  GetDataBlob {id: String}
+  GetDataBlob {id: String},
+  Addon {data: String}
 }
 
 #[derive(Default)]
@@ -131,10 +134,13 @@ pub struct Process {
   pub versions: ProcessVersions,
   pub env: ProcessEnv,
   #[serde(rename = "resourcesPath")]
-  pub resources_path: String
+  pub resources_path: String,
+  #[serde(rename = "execPath")]
+  pub exec_path: String,
+  pub argv: Vec<String>
 }
 impl Process {
-  pub fn new(platform:String, versions:ProcessVersions, env: ProcessEnv, resources_path: String) -> Process {
-    Process {platform, versions, env, resources_path}
+  pub fn new(platform:String, versions:ProcessVersions, env: ProcessEnv, resources_path: String, exec_path:String, argv: Vec<String>) -> Process {
+    Process {platform, versions, env, resources_path, exec_path, argv}
   }
 }

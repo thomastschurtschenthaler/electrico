@@ -6,7 +6,7 @@ use std::{collections::HashMap, fs, path::PathBuf};
 use tao::{dpi::{LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize}, event_loop::{EventLoopProxy, EventLoopWindowTarget}, window::{Icon, Window, WindowBuilder, WindowId}};
 use serde_json::Error;
 use wry::{http::Request, RequestAsyncResponder, WebView, WebViewBuilder};
-use crate::{common::{append_js_scripts, escape, is_module_request, respond_status, CONTENT_TYPE_TEXT, JS_DIR_FRONTEND}, electron::types::{BrowserWindowCreateParam, Rectangle, ShowMessageBoxOptions}, types::{Command, ElectricoEvents, FrontendCommand}};
+use crate::{common::{append_js_scripts, escape, get_message_data, is_module_request, respond_404, respond_status, DataQueue, CONTENT_TYPE_TEXT, JS_DIR_FRONTEND}, electron::types::{BrowserWindowCreateParam, Rectangle, ShowMessageBoxOptions}, types::{Command, ElectricoEvents, FrontendCommand}};
 
 pub struct FrontendWindow {
     window:Window,
@@ -33,7 +33,9 @@ pub struct Frontend {
     windows:HashMap<String, FrontendWindow>,
     opened_windows:usize,
     frontendalljs:String,
-    rsrc_dir:PathBuf
+    rsrc_dir:PathBuf,
+    data_queue:DataQueue,
+    pub file_protocols:Vec<String>,
 }
 impl Frontend {
     pub fn new(rsrc_dir:PathBuf) -> Frontend {
@@ -46,7 +48,9 @@ impl Frontend {
             windows:HashMap::new(),
             opened_windows:0,
             frontendalljs:frontendalljs,
-            rsrc_dir:rsrc_dir
+            rsrc_dir:rsrc_dir,
+            file_protocols:Vec::new(),
+            data_queue:DataQueue::new()
         }
     }
     pub fn create_window(&mut self, id:String, event_loop:&EventLoopWindowTarget<ElectricoEvents>, proxy:EventLoopProxy<ElectricoEvents>, config_params:BrowserWindowCreateParam) {
@@ -54,47 +58,47 @@ impl Frontend {
         let ipc_handler_id = id.clone();
         let ipc_handler = move |request: Request<Vec<u8>>, responder:RequestAsyncResponder| {
             trace!("frontend ipc request {}", request.uri().path().to_string());
-            let msgr =  String::from_utf8(request.body().to_vec());
-            match msgr {
-                Ok(msg) => {
-                  trace!("frontend ipc request body {}", msg.as_str());
-                  let commandr:Result<FrontendCommand, Error> = serde_json::from_str(msg.as_str());
-                  match commandr {
+            let message_data:Option<(String, Option<Vec<u8>>)> = get_message_data(&request);
+            if let Some(message_data) = message_data {
+                trace!("frontend ipc request action {}", message_data.0.as_str());
+                let commandr:Result<FrontendCommand, Error> = serde_json::from_str(message_data.0.as_str());
+                match commandr {
                     Ok (command) => {
-                      match command {
-                        FrontendCommand::PostIPC {request_id, nonce, params } => {
-                            trace!("frontend ipc call {} {}", nonce, params);
-                            if nonce!=ipc_handler_id {
-                                error!("frontend ipc call nonce does not match - forbidden client-nonce:{} backend-nonce:{}", nonce, ipc_handler_id.clone());
-                                respond_status(StatusCode::FORBIDDEN, CONTENT_TYPE_TEXT.to_string(), "forbidden".to_string().into_bytes(), responder);
-                                return;
+                        match command {
+                            FrontendCommand::PostIPC {request_id, nonce, params } => {
+                                trace!("frontend ipc call {} {}", nonce, params);
+                                if nonce!=ipc_handler_id {
+                                    error!("frontend ipc call nonce does not match - forbidden client-nonce:{} backend-nonce:{}", nonce, ipc_handler_id.clone());
+                                    respond_status(StatusCode::FORBIDDEN, CONTENT_TYPE_TEXT.to_string(), "forbidden".to_string().into_bytes(), responder);
+                                    return;
+                                }
+                                let _ = ipc_proxy.send_event(ElectricoEvents::ExecuteCommand{command:Command::PostIPC {browser_window_id:ipc_handler_id.clone(), request_id, params}, responder, data_blob:message_data.1});
+                            },
+                            FrontendCommand::GetProcessInfo {nonce} => {
+                                if nonce!=ipc_handler_id {
+                                    error!("frontend GetProcessInfo call nonce does not match - forbidden client-nonce:{} backend-nonce:{}", nonce, ipc_handler_id.clone());
+                                    respond_status(StatusCode::FORBIDDEN, CONTENT_TYPE_TEXT.to_string(), "forbidden".to_string().into_bytes(), responder);
+                                    return;
+                                }
+                                let _ = ipc_proxy.send_event(ElectricoEvents::ExecuteCommand{command:Command::Node { invoke: crate::node::types::NodeCommand::GetProcessInfo }, responder, data_blob:None});
+                            },
+                            FrontendCommand::DOMContentLoaded {title } => {
+                                let _ = ipc_proxy.send_event(ElectricoEvents::ExecuteCommand{command:Command::DOMContentLoaded {browser_window_id:ipc_handler_id.clone(), title}, responder, data_blob:None});
+                            },
+                            FrontendCommand::Alert {message } => {
+                                let _ = ipc_proxy.send_event(ElectricoEvents::ExecuteCommand{command:Command::Electron { invoke: crate::electron::types::ElectronCommand::ShowMessageBoxSync { options: ShowMessageBoxOptions::new(message) } }, responder, data_blob:None});
+                            },
+                            FrontendCommand::GetDataBlob { id } => {
+                                let _ = ipc_proxy.send_event(ElectricoEvents::ExecuteCommand{command:Command::FrontendGetDataBlob { id }, responder, data_blob:None});
                             }
-                            let _ = ipc_proxy.send_event(ElectricoEvents::ExecuteCommand{command:Command::PostIPC {browser_window_id:ipc_handler_id.clone(), request_id, params}, responder, data_blob:None});
-                        },
-                        FrontendCommand::GetProcessInfo {nonce} => {
-                            if nonce!=ipc_handler_id {
-                                error!("frontend GetProcessInfo call nonce does not match - forbidden client-nonce:{} backend-nonce:{}", nonce, ipc_handler_id.clone());
-                                respond_status(StatusCode::FORBIDDEN, CONTENT_TYPE_TEXT.to_string(), "forbidden".to_string().into_bytes(), responder);
-                                return;
-                            }
-                            let _ = ipc_proxy.send_event(ElectricoEvents::ExecuteCommand{command:Command::Node { invoke: crate::node::types::NodeCommand::GetProcessInfo }, responder, data_blob:None});
-                        },
-                        FrontendCommand::DOMContentLoaded {title } => {
-                            let _ = ipc_proxy.send_event(ElectricoEvents::ExecuteCommand{command:Command::DOMContentLoaded {browser_window_id:ipc_handler_id.clone(), title}, responder, data_blob:None});
-                        },
-                        FrontendCommand::Alert {message } => {
-                            let _ = ipc_proxy.send_event(ElectricoEvents::ExecuteCommand{command:Command::Electron { invoke: crate::electron::types::ElectronCommand::ShowMessageBoxSync { options: ShowMessageBoxOptions::new(message) } }, responder, data_blob:None});
                         }
-                      }
                     }
                     Err(e) => {
-                      error!("json serialize error {}", e.to_string());
+                        error!("json serialize error {}", e.to_string());
                     }
-                  }
-                },
-                Err(e) => {
-                  error!("utf8 error {}", e.to_string());
                 }
+            } else {
+                respond_404(responder); 
             }
         };
         
@@ -161,10 +165,15 @@ impl Frontend {
         };
         let preload_file = self.rsrc_dir.clone().join(preload_init.clone());
         let mut preload_script = "".to_string();
+        if let Some(add_args) = config_params.config.web_preferences.additional_arguments {
+            for arg in add_args {
+                preload_script=preload_script+format!("window.__electrico.addArgument('{}');", escape(&arg)).as_str();
+            }
+        }
         if preload_init.len()>0 {
             match std::fs::read_to_string(preload_file) {
                 Ok(preloadfilejs) => {
-                    preload_script = preloadfilejs;
+                    preload_script = preload_script + preloadfilejs.as_str();
                 },
                 Err(_e) => {
                     error!("cant load preload file {}", preload_init);
@@ -216,7 +225,7 @@ impl Frontend {
         let webview = builder
             .with_asynchronous_custom_protocol("fil".into(), fil_handler)
             .with_asynchronous_custom_protocol("ipc".into(), ipc_handler)
-            .with_initialization_script(("window.__is_windows=".to_string()+is_windows+";var __electrico_nonce='"+config_params.id.clone().as_str()+"'; window.__electrico_preload=function(document, ph){\nph.before(__electrico_nonce); var window=document.window; var require=document.window.require;\n"+preload_script.as_str()+"\nph.after();\n};\n"+self.frontendalljs.as_str()+"\n__electrico_nonce='';\n").as_str())
+            .with_initialization_script(("window.__is_windows=".to_string()+is_windows+";var __electrico_nonce='"+config_params.id.clone().as_str()+"'; window.__electrico_preload=function(document, ph){\nph.before(__electrico_nonce); var window=document.window; var process=window.process; var require=document.window.require;\n"+preload_script.as_str()+"\nph.after();\n};\n"+self.frontendalljs.as_str()+"\n__electrico_nonce='';\n").as_str())
             .with_navigation_handler(nav_handler)
             .with_devtools(true)
             .build().unwrap();
@@ -244,12 +253,30 @@ impl Frontend {
                 #[cfg(target_os = "windows")] {
                     url = "http://fil.file/";
                 }
+                if let Some(_) = fpath.find(":") {
+                    //url = "";
+                }
                 window.set_client_path_base(Some(self.rsrc_dir.clone()));
                 let _ = window.webview.load_url((url.to_string() + fpath.as_str()).as_str());
             }
             
         } else {
             error!("load_url - frontend_webview not there - id: {}", id);
+        }
+    }
+    pub fn set_title(&mut self, id:&String, title: String) {
+        if let Some(window) = self.windows.get(id) {
+            window.window.set_title(title.as_str());
+        } else {
+            error!("set_title - frontend_webview not there - id: {}", id);
+        }
+    }
+    pub fn get_title(&mut self, id:&String) -> Option<String> {
+        if let Some(window) = self.windows.get(id) {
+            return Some(window.window.title());
+        } else {
+            error!("get_title - frontend_webview not there - id: {}", id);
+            return None;
         }
     }
     pub fn show(&mut self, id:&String, shown: bool) {
@@ -259,17 +286,29 @@ impl Frontend {
             error!("show - frontend_webview not there - id: {}", id);
         }
     }
-    pub fn send_channel_message(&mut self, proxy: EventLoopProxy<ElectricoEvents>, id:String, channel:String, args:String) {
+    pub fn send_channel_message(&mut self, proxy: EventLoopProxy<ElectricoEvents>, id:String, rid:String, channel:String, args:String, data:Option<Vec<u8>>) {
         if let Some(window) = self.windows.get(&id) {
-            let _ = window.webview.evaluate_script_with_callback(format!("window.__electrico.sendChannelMessage('{}@{}');", &channel, escape(&args)).as_str(), move |r| {
+            if let Some(data) = data {
+                self.data_queue.add(&rid, data);
+            }
+            let _ = window.webview.evaluate_script_with_callback(format!("window.__electrico.sendChannelMessage('{}', '{}', '{}');", &rid, &channel, escape(&args)).as_str(), move |r| {
                 if r.len()==0 {
                     trace!("send_channel_message not OK - resending");
-                    let _ = proxy.send_event(ElectricoEvents::SendChannelMessageRetry { browser_window_id: id.clone(), channel:channel.clone(), args:args.clone()});
+                    let _ = proxy.send_event(ElectricoEvents::SendChannelMessageRetry { browser_window_id: id.clone(), rid:rid.clone(), channel:channel.clone(), args:args.clone()});
                 }
             });
         } else {
             error!("send_channel_message - frontend_webview not there - id: {}", id);
         }
+    }
+    pub fn get_data_blob(&mut self, id:String) -> Option<Vec<u8>> {
+        let data:Option<Vec<u8>>;
+        if let Some(d) = self.data_queue.take(&id) {
+            data = Some(d.to_vec());
+        } else {
+            data = None;
+        };
+        return data;
     }
     pub fn execute_javascript(&mut self, id:&String, script:&String) {
         if let Some(window) = self.windows.get(id) {
@@ -407,5 +446,9 @@ impl Frontend {
         } else {
             error!("set_title - frontend_webview not there - id: {}", id);
         }
-    }   
+    } 
+    pub fn register_file_protocol(&mut self, schema:String) {
+        self.file_protocols.push(schema);
+    }
+    
 }

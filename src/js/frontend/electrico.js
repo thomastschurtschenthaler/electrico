@@ -3,6 +3,19 @@
         let ipcRenderer = null;
         let _XMLHttpRequest = XMLHttpRequest;
         var window=document.window;
+        if (window.requestIdleCallback==null) {
+            window.requestIdleCallback = (cb, op) => {
+                setTimeout(cb, 0);
+            }
+        }
+        let _encodeURI = window.encodeURI;
+        window.encodeURI = (uri) => {
+            let ix = uri.indexOf("://");
+            if (ix>=0 && window.location.href.startsWith("fil://file/"+uri.substring(0, ix+3))) {
+                uri = "fil://file/"+uri;
+            }
+            return _encodeURI(uri);
+        }
         __init_shared(window);
         window.alert = (msg) => {
             const req = new XMLHttpRequest();
@@ -10,11 +23,19 @@
             req.send(JSON.stringify({"action": "Alert", "message": msg}));
         }
         function sendIPC(request_id, nonce, async, ...args) {
+            let Buffer = require('buffer').Buffer;
             const req = new _XMLHttpRequest();
-            req.open("POST", window.__create_protocol_url("ipc://ipc/send"), async);
-            req.send(JSON.stringify({"action":"PostIPC", "request_id":request_id, "nonce": nonce, "params":JSON.stringify(args)}));
+            let data_blob = null;
+            let channel = args[0];
+            if (args.length>1 && (Buffer.isBuffer(args[1]) || args[1] instanceof Uint8Array)) {
+                data_blob=args[1];
+                args[1]={_electrico_buffer_id:request_id};
+            }
+            let action = JSON.stringify({"action":"PostIPC", "request_id":request_id, "nonce": nonce, "params":JSON.stringify(args)});
+            req.open("POST", window.__create_protocol_url("ipc://ipc/ipc."+channel+(data_blob!=null?("?"+encodeURIComponent(action)):"")), async);
+            req.send(data_blob!=null?data_blob:action);
             return req;
-        }
+       }
         let uuidv4 = window.__uuidv4;
         function processi(nonce) {
             let _processInfo=null;
@@ -48,7 +69,8 @@
                             }
                         }
                     } else if (prop=="argv") {
-                        return [];
+                        let args = _processInfo["argv"];
+                        return args.concat(window.__electrico.add_args);
                     }
                     return _processInfo[prop];
                 }
@@ -106,6 +128,18 @@
                     exposeInMainWorld: (method, fun) => {
                         window[method] = fun;
                     }
+                },
+                webFrame: {
+                    setZoomLevel: (level) => {
+                        console.log("setZoomLevel", level);
+                        //TODO
+                    }
+                },
+                webUtils: {
+                    getPathForFile: (file) => {
+                        console.log("getPathForFile", file);
+                        return file;
+                    }
                 }
             }
             return _electron_i[nonce];
@@ -119,6 +153,8 @@
             module_paths: {},
             module_cache: {},
             channel: {},
+            received_ports: {},
+            add_args: [],
             libs: {
                 "electron":electron,
             },
@@ -132,33 +168,83 @@
                 }
                 return lib;
             },
-            sendChannelMessage: (argumentsstr) => {
+            sendChannelMessage: (rid, channel, argumentsstr) => {
                 setTimeout(()=>{
-                    let sep_channel = argumentsstr.indexOf("@");
-                    let channel = argumentsstr.substring(0, sep_channel);
-                    let args = JSON.parse(argumentsstr.substring(sep_channel+1, argumentsstr.length));
-                    ipcRenderer.emit(channel, {}, ...args);
+                    let args = JSON.parse(argumentsstr);
+                    if (args.posted) {
+                        let doCall = () => {
+                            if (args.portid!=null) {
+                                let port = window.__electrico.received_ports[args.portid];
+                                port.postMessage(args.data);
+                            } else {
+                                let ports = args.ports.map((p) => {
+                                    let channel = new MessageChannel();
+                                    let port = channel.port1;
+                                    port.onmessage = function(e) {
+                                        sendIPC(uuidv4(), ipcRenderer.nonce, true, p.id, e.data);
+                                    };
+                                    window.__electrico.received_ports[p.id] = port;
+                                    let _postMessage=channel.port2.postMessage;
+                                    channel.port2.postMessage = (...args) => {
+                                        _postMessage.bind(channel.port2)(...args);
+                                    }
+                                    return channel.port2;
+                                });
+                                if (args.fromWebContents) {
+                                    let send = {"sender":ipcRenderer, "ports": ports};
+                                    ipcRenderer.emit(channel, send, args.data);
+                                } else {
+                                    let event = new MessageEvent("message", {"ports":ports});
+                                    event.data=args.data;
+                                    ipcRenderer.emit(channel, event);
+                                }
+                            }
+                        }
+                        if (args.data._electrico_buffer_id!=null) {
+                            const req = new XMLHttpRequest();
+                            req.open("POST", window.__create_protocol_url("ipc://ipc/getdatablob"), true);
+                            req.responseType = "arraybuffer";
+                            req.send(JSON.stringify({"action":"GetDataBlob", "id":args.data._electrico_buffer_id}));
+                            req.onreadystatechange = function() {
+                                if (this.readyState == 4) {
+                                    if (req.status == 200) {
+                                        args.data = Buffer.from(req.response);
+                                        doCall();
+                                    }
+                                }
+                            };
+                        } else {
+                            doCall();
+                        }
+                    } else {
+                        let send = {"sender":ipcRenderer, "ports": []};
+                        ipcRenderer.emit(channel, send, ...args);
+                    }
                 }, 0);
                 return "OK";
+            },
+            addArgument: (arg) => {
+                window.__electrico.add_args.push(arg);
             }
         };
         let _addEventListener = window.addEventListener;
-        window.__electrico_preload(document, {
-            before: (nonce) => {
-                window.addEventListener = (e, h) => {
-                    _addEventListener(e, (e)=>{
-                        let process=processi(nonce);
-                        let he = "("+h.toString()+")(e)";
-                        eval(he);
-                    })
-                };
-            },
-            after: () => {
-                window.addEventListener=_addEventListener;
-                window.process=processi(null);
-            }
-        });
-        //setTimeout(()=>{window.__electrico_preload(document);}, 1000);
+        //setTimeout(()=>{
+            window.__electrico_preload(document, {
+                before: (nonce) => {
+                    window.addEventListener = (e, h) => {
+                        _addEventListener(e, (e)=>{
+                            let process=processi(nonce);
+                            let he = "("+h.toString()+")(e)";
+                            eval(he);
+                        })
+                    };
+                },
+                after: () => {
+                    window.addEventListener=_addEventListener;
+                    window.process=processi(null);
+                }
+            });
+        //}, 1000);
         
         let start = (new Date()).getTime();
         let init_iframes = (nonce)=>{

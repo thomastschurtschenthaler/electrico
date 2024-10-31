@@ -1,4 +1,4 @@
-use std::{process::{Command, Stdio}, sync::mpsc::{self, Receiver, Sender}, thread, time::Duration};
+use std::{process::{Command, Stdio}, sync::mpsc::{self, Receiver, Sender}, time::Duration};
 
 use log::{debug, error, trace};
 use reqwest::StatusCode;

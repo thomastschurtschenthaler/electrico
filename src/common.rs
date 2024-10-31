@@ -4,8 +4,9 @@ use include_dir::{include_dir, Dir};
 use queues::{IsQueue, Queue};
 use reqwest::{header::{ACCESS_CONTROL_ALLOW_ORIGIN, CONTENT_TYPE}, StatusCode};
 use tokio::runtime::Runtime;
-use wry::{http::Response, RequestAsyncResponder};
-use log::{debug, info, trace};
+use urlencoding::decode;
+use wry::{http::{Request, Response}, RequestAsyncResponder};
+use log::{debug, info, trace, error};
 use std::io::Read;
 
 pub const CONTENT_TYPE_TEXT: &str = "text/plain;charset=utf-8";
@@ -55,13 +56,18 @@ pub fn handle_file_request(tokio_runtime:&Runtime, module:bool, path:String, ful
     let resources_rt=resources.clone();
     tokio_runtime.spawn(
         async move {
-            if full_path.exists() {
+            if let Some(res) = resources_rt.get(&path) {
+                respond_status(
+                    StatusCode::OK, 
+                    mime_guess::from_path(path).first_or_octet_stream().to_string(), 
+                    res.to_vec(), responder); 
+            } else if full_path.exists() {
                 match File::open(full_path.clone()) {
                     Ok (mut f) => {
                         let mut buffer = Vec::new();
                         match f.read_to_end(&mut buffer) {
                             Ok(_r) => {
-                                respond_status(
+                               respond_status(
                                     StatusCode::OK, 
                                     mime_guess::from_path(full_path).first_or_octet_stream().to_string(), 
                                     buffer, responder);
@@ -79,18 +85,39 @@ pub fn handle_file_request(tokio_runtime:&Runtime, module:bool, path:String, ful
                     }
                 }
             } else {
-                if let Some(res) = resources_rt.get(&path) {
-                    respond_status(
-                        StatusCode::OK, 
-                        mime_guess::from_path(path).first_or_octet_stream().to_string(), 
-                        res.to_vec(), responder); 
-                } else {
-                    trace!("file not found {}", path);
-                    respond_not_found(module, responder);
-                }
+                trace!("file not found {}", path);
+                respond_not_found(module, responder);
             }
         }
     );
+}
+
+pub fn get_message_data(request: &Request<Vec<u8>>) -> Option<(String, Option<Vec<u8>>)> {
+    let cmdmsg:String;
+    let data_blob:Option<Vec<u8>>;
+    if let Some(queryenc) = request.uri().query() {
+        if let Ok(query) = decode(queryenc) {
+            cmdmsg=query.to_string();
+            data_blob = Some(request.body().to_vec());
+        } else {
+            error!("url decoder error");
+            return None;
+        }
+    } else {
+        let msgr =  String::from_utf8(request.body().to_vec());
+        match msgr {
+            Ok(msg) => {
+                trace!("backend cmd request body {}", msg.as_str());
+                cmdmsg=msg;
+                data_blob=None;
+            },
+            Err(e) => {
+                error!("utf8 error {}", e);
+                return None;
+            }
+        }
+    }
+    return Some((cmdmsg, data_blob));
 }
 
 pub fn escape(s:&String) -> String {

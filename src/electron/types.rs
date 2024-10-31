@@ -5,6 +5,8 @@ pub struct BrowserWindowLoadFileParamConfigWebPreferences {
   pub node_integration: bool,
   #[serde(rename = "contextIsolation")]
   pub context_isolation: bool,
+  #[serde(rename = "additionalArguments")]
+  pub additional_arguments: Option<Vec<String>>
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -147,13 +149,15 @@ pub enum BrowserWindowMinimizedAction {
 pub enum ElectronCommand {
     BrowserWindowCreate {params: BrowserWindowCreateParam},
     BrowserWindowLoadfile {params: BrowserWindowLoadFileParam},
+    BrowserWindowSetTitle {id: String, title:String},
+    BrowserWindowGetTitle {id: String},
     BrowserWindowShow {id: String, shown:bool},
     BrowserWindowClose {id: String},
     BrowserWindowBounds {id: String, params:BrowserWindowBoundsAction},
     BrowserWindowMaximized {id: String, params:BrowserWindowMaximizedAction},
     BrowserWindowMinimized {id: String, params:BrowserWindowMinimizedAction},
     BrowserWindowDevTools {params: BrowserWindowDevToolsParam},
-    ChannelSendMessage {id: String, channel: String, args: String},
+    ChannelSendMessage {id: String, rid: String, channel: String, args: String},
     ExecuteJavascript {id: String, script:String},
     AppQuit {exit: bool},
     AppSetName {name: String},
@@ -167,5 +171,6 @@ pub enum ElectronCommand {
     ShowMessageBoxSync {options:ShowMessageBoxOptions},
     GetPrimaryDisplay,
     ShellOpenExternal {url:String},
-    PrintToPDF {id: String}
+    PrintToPDF {id: String},
+    RegisterFileProtocol {schema: String}
 }

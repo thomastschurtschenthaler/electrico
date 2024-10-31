@@ -5,7 +5,7 @@ use log::{error, debug};
 pub enum IPCMsg {
     Called,
     //Pending,
-    Response {params:String}
+    Response {params:Vec<u8>, mime_type:String}
 }
 
 pub struct IPCChannel {

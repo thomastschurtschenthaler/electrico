@@ -32,8 +32,8 @@
     function wrapInvoke(invoke) {
         return {"action":"Node", invoke:invoke};
     }
+    let decoder = new TextDecoder();
     let node = {
-        path:null,
         path: path, 
         fs: {
             constants: {
@@ -61,7 +61,7 @@
             },
             lstatSync(path) {
                 let {r, e} = $e_node.syncFSLstat({"path":path});
-                if (e!=null) throw "lstat failed: "+path;
+                if (e!=null) throw {"code":"ENOENT", "message": "no such file or directory, lstat '"+path+"'"};
                 let resp = JSON.parse(r);
                 return {
                     isDirectory: () => {
@@ -113,6 +113,10 @@
             },
             writeFileSync(path, data, options) {
                 if (options!=null && typeof options != 'object') options = {encoding: options};
+                if (typeof path === 'number') {
+                    node.fs.write(path, data, ()=>{});
+                    return {};
+                }
                 let {r, e} = $e_node.syncFSWriteFile({"path":path, options:options}, data);
                 if (e!=null) throw "writeFileSync failed: "+path;
             },
@@ -122,22 +126,22 @@
                     options=null;
                 }
                 if (options!=null && typeof options != 'object') options = {encoding: options};
+                if (typeof path === 'number') {
+                    node.fs.write(path, data, cb);
+                    return;
+                }
                 $e_node.asyncFSWriteFile({"path":path, "data": data, options:options}, data).then((e, r)=>{
-                    if (e!==null) {
-                        throw "writeFile failed: "+path;
-                    } else {
-                        cb();
-                    }
+                    cb(e);
                 });
             },
             readFileSync(path, options) {
                 if (options!=null && typeof options != 'object') options = {encoding: options};
-                let {r, e} = $e_node.syncFSReadFile({"path":path, options:options});
+                let {r, e} = $e_node.syncFSReadFileBin({"path":path, options:options});
                 if (e!=null) throw "readFileSync failed: "+path;
                 if (options==null || options.encoding==null) {
                     return Buffer.from(r);
                 }
-                return r;
+                return decoder.decode(r);
             },
             readFile(path, options, cb) {
                 if (cb==null) {
@@ -145,14 +149,14 @@
                     options=null;
                 }
                 if (options!=null && typeof options != 'object') options = {encoding: options};
-                $e_node.asyncFSReadFile({"path":path, options:options}).then((e, r)=>{
+                $e_node.asyncFSReadFileBin({"path":path, options:options}).then((e, r)=>{
                     if (e!==null) {
                         cb(e);
                     } else {
                         if (options==null || options.encoding==null) {
                             cb(null, Buffer.from(r));
                         } else {
-                            cb(null, r);
+                            cb(null, decoder.decode(r));
                         }
                     }
                 });
@@ -182,7 +186,7 @@
                 if (mode==null) mode="0o666";
                 if (flags==null) flags="r";
                 _fd++;
-                $e_node.asyncFSOpen({fd:_fd, "path":path, "flags":flags.toLowerCase(), "mode":mode}).then((e, r)=>{
+                $e_node.asyncFSOpen({fd:_fd, "path":path, "flags":flags.toLowerCase(), "mode":mode+""}).then((e, r)=>{
                     if (e!==null) {
                         cb(e);
                     } else {
@@ -192,9 +196,7 @@
             },
             close(fd, cb) {
                 $e_node.asyncFSClose({"fd":fd}).then((e, r)=>{
-                    if (e!==null) {
-                        cb(e);
-                    }
+                    cb(e);
                 });
             },
             read(fd, ...args) {
@@ -277,7 +279,15 @@
                 cb(null, r);
             },
             fdatasync: (fd, cb) => {
-                $e_node.asyncFSFdatasync({"fd":fd});
+                $e_node.asyncFSFdatasync({"fd":fd}).then((e, r) => {
+                    cb(e);
+                });
+            },
+            unlink: (path) => {
+                $e_node.syncFSUnlink({"path":path});
+            },
+            renameSync: (oldPath, newPath) => {
+                $e_node.syncFSRename({"old_path":oldPath, "new_path": newPath});
             },
             watch(path, options, cb) {
                 let wid = uuidv4();
@@ -336,6 +346,16 @@
                 readFile: (path, options) => {
                     return new Promise((resolve, reject)=>{
                         resolve(node.fs.readFileSync(path, options));
+                    });
+                },
+                unlink: (path) => {
+                    return new Promise((resolve, reject)=>{
+                        resolve(node.fs.unlink(path));
+                    });
+                },
+                rename: (oldPath, newPath) => {
+                    return new Promise((resolve, reject)=>{
+                        resolve(node.fs.renameSync(oldPath, newPath));
                     });
                 }
             }
@@ -438,6 +458,15 @@
                     window.__electrico.tmpdir = r;
                 }
                 return window.__electrico.tmpdir;
+            },
+            release: () => {
+                return "darwin";
+            },
+            hostname: () => {
+                return "localhost";
+            },
+            arch: () => {
+                return "arm";
             }
         },
         querystring: queryString,
@@ -458,24 +487,27 @@
         },
         crypto: {
             createHash: (alg) => {
+                let calgr;
                 if (alg=="sha256") {
-                    let SHA256 = require("crypto-js/sha256");
-                    return {
-                        update: (text) => {
-                            let hash = SHA256(text);
-                            return {
-                                digest: (d) => {
-                                    if (d=="hex") {
-                                        return hash.toString();
-                                    } else {
-                                        throw "createHash - unknown digest: "+d;
-                                    }
+                    calgr = require("crypto-js/sha256");
+                } else if (alg=="md5") {
+                    calgr = require("crypto-js/md5");
+                } else {
+                    throw "createHash - unknown algorithm: "+alg;
+                }
+                return {
+                    update: (text) => {
+                        let hash = calgr(text);
+                        return {
+                            digest: (d) => {
+                                if (d=="hex") {
+                                    return hash.toString();
+                                } else {
+                                    throw "createHash - unknown digest: "+d;
                                 }
                             }
                         }
                     }
-                } else {
-                    throw "createHash - unknown algorithm: "+alg;
                 }
             }
         },
@@ -629,17 +661,84 @@
             }
         },
         zlib :{
-            createDeflateRaw: {
-
+            createDeflateRaw: (options) => {
+                class DeflateRawCls extends EventEmitter {
+                    constructor(options) {
+                        super();
+                        this.write = (async function(data) {
+                            let stream = new Blob([data]).stream();
+                            const cReader = stream.pipeThrough(new CompressionStream("gzip")).getReader();
+                            while (true) {
+                                let read = await cReader.read();
+                                if (read.done){
+                                    this.emit("end");
+                                    if (this._fluscb!=null) {
+                                        this._fluscb();
+                                    }
+                                    break;
+                                } else {
+                                    this.emit("data", Buffer.from(read.value));
+                                }
+                            }
+                        }).bind(this);
+                        this.flush = (cb => {
+                            this._fluscb=cb;
+                        }).bind(this);
+                    }
+                }
+                let deflate = new DeflateRawCls(options);
+                return deflate; 
             },
-            createInflateRaw: {
+            createInflateRaw: (options) => {
+                class InflateRawCls extends EventEmitter {
+                    constructor(options) {
+                        super();
+                        this.write = (async function(data) {
+                            let stream = new Blob([data]).stream();
+                            const cReader = stream.pipeThrough(new DecompressionStream("gzip")).getReader();
+                            while (true) {
+                                let read = await cReader.read();
+                                if (read.done){
+                                    this.emit("end");
+                                    if (this._fluscb!=null) {
+                                        this._fluscb();
+                                    }
+                                    break;
+                                } else {
+                                    this.emit("data", Buffer.from(read.value));
+                                }
+                            }
+                        }).bind(this);
+                        this.flush = (cb => {
+                            this._fluscb=cb;
+                        }).bind(this);
+                    }
+                }
+                let inflate = new InflateRawCls(options);
+                return inflate; 
+            }
+        },
+        assert: {
 
+        },
+        stream: {
+            Transform: class {
+
+            }
+        },
+        readline: {
+            createInterface: (options) => {
+                // TODO
+                console.log("readline.createInterface");
+                return null;
             }
         }
     };
+    
     window.__electrico.libs["node:path"] = node.path;
     window.__electrico.libs.path = node.path;
     window.__electrico.libs["node:fs"] = node.fs;
+    window.__electrico.libs["original-fs"] = node.fs;
     window.__electrico.libs.fs = node.fs;
     window.__electrico.libs["node:child_process"] = node.child_process;
     window.__electrico.libs.child_process = node.child_process;
@@ -665,4 +764,10 @@
     window.__electrico.libs.net = node.net;
     window.__electrico.libs["node:zlib"] =node.zlib;
     window.__electrico.libs.zlib = node.zlib;
+    window.__electrico.libs["node:assert"] =node.assert;
+    window.__electrico.libs.assert = node.assert;
+    window.__electrico.libs["node:stream"] =node.stream;
+    window.__electrico.libs.stream = node.stream;
+    window.__electrico.libs["node:readline"] =node.readline;
+    window.__electrico.libs.readline = node.readline;
 })();

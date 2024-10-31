@@ -1,9 +1,9 @@
-use std::{path::{Path, PathBuf}, sync::mpsc::{self, Receiver, Sender}, time::Duration};
-use log::{debug, info, trace};
+use std::{path::{Path, PathBuf}, time::Duration};
+use log::{debug, trace};
 use muda::Menu;
 use reqwest::StatusCode;
 use rfd::MessageLevel;
-use tao::event_loop::{ControlFlow, EventLoopProxy, EventLoopWindowTarget};
+use tao::event_loop::{EventLoopProxy, EventLoopWindowTarget};
 use tokio::{runtime::Runtime, time::sleep};
 use wry::RequestAsyncResponder;
 
@@ -12,7 +12,7 @@ use super::{menu::create_menu, types::{BrowserWindowBoundsAction, BrowserWindowM
 
 pub fn process_electron_command(tokio_runtime:&Runtime, event_loop:&EventLoopWindowTarget<ElectricoEvents>, proxy:EventLoopProxy<ElectricoEvents>,
     app_env:&mut AppEnv, rsrc_dir:&PathBuf, package:&Package,
-    frontend:&mut Frontend, backend:&mut Backend, command:ElectronCommand,responder:RequestAsyncResponder) -> Option<Menu> {
+    frontend:&mut Frontend, backend:&mut Backend, command:ElectronCommand,responder:RequestAsyncResponder, data_blob:Option<Vec<u8>>) -> Option<Menu> {
     let mut menu_ret: Option<Menu> = None;
     match command {
         ElectronCommand::BrowserWindowCreate { params } => {
@@ -26,6 +26,17 @@ pub fn process_electron_command(tokio_runtime:&Runtime, event_loop:&EventLoopWin
             backend.command_callback("BrowserWindowLoadfile".to_string(), params.id);
             respond_ok(responder);
         },
+        ElectronCommand::BrowserWindowSetTitle { id, title } => {
+            frontend.set_title(&id, title);
+            respond_ok(responder);
+        },
+        ElectronCommand::BrowserWindowGetTitle { id } => {
+            if let Some(title) = frontend.get_title(&id) {
+                respond_status(StatusCode::OK, CONTENT_TYPE_JSON.to_string(), title.into_bytes(), responder);
+            } else {
+                respond_404(responder);
+            }
+        }
         ElectronCommand::BrowserWindowShow { id , shown} => {
             frontend.show(&id, shown);
             respond_ok(responder);
@@ -84,8 +95,8 @@ pub fn process_electron_command(tokio_runtime:&Runtime, event_loop:&EventLoopWin
             }
             respond_ok(responder);
         },
-        ElectronCommand::ChannelSendMessage {id, channel, args} => {
-            frontend.send_channel_message(proxy, id, channel, args);
+        ElectronCommand::ChannelSendMessage {id, rid, channel, args} => {
+            frontend.send_channel_message(proxy, id, rid, channel, args, data_blob);
             respond_ok(responder);
         },
         ElectronCommand::ExecuteJavascript {id, script} => {
@@ -419,6 +430,10 @@ pub fn process_electron_command(tokio_runtime:&Runtime, event_loop:&EventLoopWin
                     respond_ok(responder);
                 }
             );
+        },
+        ElectronCommand::RegisterFileProtocol { schema } => {
+            frontend.register_file_protocol(schema);
+            respond_ok(responder);
         }
     }
     menu_ret

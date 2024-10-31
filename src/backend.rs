@@ -1,14 +1,14 @@
-use std::{collections::HashMap, fs::File, path::PathBuf, sync::mpsc::{self, Receiver, Sender}};
+use std::{any::Any, collections::HashMap, fs::File, path::PathBuf, sync::mpsc::{self, Receiver, Sender}};
 use muda::MenuId;
 use notify::{Event, RecommendedWatcher};
+use rusqlite::Connection;
 use substring::Substring;
 use log::{debug, error, trace};
 use include_dir::{include_dir, Dir};
 use tao::{dpi::PhysicalSize, event_loop::{EventLoop, EventLoopProxy}, window::{Window, WindowBuilder}};
-use urlencoding::decode;
 use wry::{http::Request, RequestAsyncResponder, WebView, WebViewBuilder};
 use serde_json::Error;
-use crate::{common::{append_js_scripts, build_file_map, escape, handle_file_request, is_module_request, respond_404, DataQueue}, ipcchannel::IPCMsg, types::{BackendCommand, ChildProcess, NETConnection, NETServer}};
+use crate::{common::{append_js_scripts, build_file_map, escape, get_message_data, handle_file_request, is_module_request, respond_404, DataQueue}, ipcchannel::IPCMsg, types::{BackendCommand, ChildProcess, NETConnection, NETServer}};
 use crate::types::{Package, ElectricoEvents, Command};
 
 pub struct Backend {
@@ -21,7 +21,8 @@ pub struct Backend {
     fs_files:HashMap<i64, File>,
     net_server:HashMap<String, Sender<NETServer>>,
     net_connections:HashMap<String, Sender<NETConnection>>,
-    data_queue:DataQueue
+    data_queue:DataQueue,
+    addon_state: HashMap<String, Box<dyn Any>>
 }
 
 impl Backend {
@@ -34,6 +35,9 @@ impl Backend {
         const JS_DIR_BACKEND: Dir = include_dir!("src/js/backend");
         backendjs = append_js_scripts(backendjs, JS_DIR_BACKEND, Some("electrico.js"));
         let backend_js_files = build_file_map(&JS_DIR_BACKEND);
+        if let Some(fork) = &package.fork {
+            backendjs = backendjs+format!("\nwindow.__electrico.init_fork('{}', '{}', '{}');", fork.0, fork.1, escape(&fork.2)).as_str();
+        }
         let init_script = backendjs+"\nwindow.__electrico.loadMain('"+package.main.to_string().as_str()+"');";
         
         let mut window_builder = WindowBuilder::new()
@@ -58,43 +62,22 @@ impl Backend {
         let cmd_handler = move |request: Request<Vec<u8>>, responder:RequestAsyncResponder| {
             let path = request.uri().path().to_string();
             trace!("backend cmd request {} {}", path, request.body().len());
-            let cmdmsg:String;
-            let data_blob:Option<Vec<u8>>;
-            if let Some(queryenc) = request.uri().query() {
-                if let Ok(query) = decode(queryenc) {
-                    cmdmsg=query.to_string();
-                    data_blob = Some(request.body().to_vec());
-                } else {
-                    error!("url decoder error");
-                    respond_404(responder);
-                    return;
-                }
-            } else {
-                let msgr =  String::from_utf8(request.body().to_vec());
-                match msgr {
-                    Ok(msg) => {
-                        trace!("backend cmd request body {}", msg.as_str());
-                        cmdmsg=msg;
-                        data_blob=None;
-                    },
+            let message_data:Option<(String, Option<Vec<u8>>)> = get_message_data(&request);
+            
+            if let Some(message_data) = message_data {
+                let commandr:Result<Command, Error> = serde_json::from_str(message_data.0.as_str());
+                match commandr {
+                    Ok (command) => {
+                        let _ = proxy.send_event(ElectricoEvents::ExecuteCommand{command, responder, data_blob:message_data.1});
+                    }
                     Err(e) => {
-                        error!("utf8 error {}", e);
+                        error!("json serialize error {}", e.to_string());
                         respond_404(responder);
                         return;
                     }
                 }
-            }
-            
-            let commandr:Result<Command, Error> = serde_json::from_str(cmdmsg.as_str());
-            match commandr {
-                Ok (command) => {
-                    let _ = proxy.send_event(ElectricoEvents::ExecuteCommand{command, responder, data_blob});
-                }
-                Err(e) => {
-                    error!("json serialize error {}", e.to_string());
-                    respond_404(responder);
-                    return;
-                }
+            } else {
+                respond_404(responder);
             }
         };
         let tokio_runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(5).enable_io().enable_time().build().unwrap();
@@ -155,15 +138,33 @@ impl Backend {
             fs_files: HashMap::new(),
             net_server: HashMap::new(),
             net_connections: HashMap::new(),
-            data_queue: DataQueue::new()
+            data_queue: DataQueue::new(),
+            addon_state: HashMap::new()
         }
+    }
+    pub fn addon_state_insert<T: 'static>(&mut self, cid:&String, c:T) {
+        self.addon_state.insert(cid.clone(), Box::new(c));
+    }
+    pub fn addon_state_remove(&mut self, cid:&String) {
+        if let Some(_d) = self.addon_state.get(cid) {
+            self.addon_state.remove(cid);
+        }
+    }
+    pub fn addon_state_get_mut<T: 'static>(&mut self, cid:&String) -> Option<&mut T> {
+        if let Some(b) = self.addon_state.get_mut(cid) {
+            return b.as_mut().downcast_mut::<T>();
+        }
+        return None;
     }
     pub fn command_callback(&mut self, command:String, message:String) {
         let _ = self.webview.evaluate_script(format!("window.__electrico.callback['{}']('{}')", command, message).as_str());
     }
-    pub fn call_ipc_channel(&mut self, browser_window_id:&String, request_id:&String, params:String, sender:Sender<IPCMsg>) {
+    pub fn call_ipc_channel(&mut self, browser_window_id:&String, request_id:&String, params:String, data_blob:Option<Vec<u8>>, sender:Sender<IPCMsg>) {
          let request_id2 = request_id.clone();
          trace!("call_ipc_channel {} {}", &request_id2, &params);
+         if let Some(data) = data_blob {
+            self.data_queue.add(request_id, data);
+        }
          _ = self.webview.evaluate_script_with_callback(
             format!("window.__electrico.callIPCChannel('{}@{}@@{}');", browser_window_id, request_id, escape(&params)).as_str()
             , move |r| {
