@@ -14,7 +14,7 @@ use muda::{Menu, MenuEvent};
 use serde_json::Error;
 use backend::Backend;
 use frontend::Frontend;
-use ipcchannel::{IPCChannel, IPCMsg};
+use ipcchannel::{IPCChannel, IPCResponse};
 use log::{debug, error, info, trace, warn};
 use node::node::{process_node_command, AppEnv};
 use reqwest::StatusCode;
@@ -151,9 +151,6 @@ fn main() -> wry::Result<()> {
       Event::UserEvent(ElectricoEvents::FrontendNavigate{browser_window_id, page, preload}) => {
         
       },
-      Event::UserEvent(ElectricoEvents::IPCCallRetry{browser_window_id, request_id, params, sender}) => {
-        backend.call_ipc_channel(&browser_window_id, &request_id, params, None, sender);
-      }
       Event::UserEvent(ElectricoEvents::ExecuteCommand{command, responder, data_blob}) => {
         trace!("backend ExecuteCommand call");
         match command {
@@ -161,63 +158,15 @@ fn main() -> wry::Result<()> {
             trace!("PostIPC {} {} {}", browser_window_id, request_id, params);
             let r_request_id = request_id.clone();
             
-            let (sender, receiver): (Sender<IPCMsg>, Receiver<IPCMsg>) = mpsc::channel();
+            let (sender, receiver): (Sender<IPCResponse>, Receiver<IPCResponse>) = mpsc::channel();
             ipc_channel.start(request_id.clone(), sender.clone());
-
-            let callipc_proxy = proxy.clone();
-            let callipc_browser_window_id = browser_window_id.clone();
-            let callipc_request_id = request_id.clone();
-            let callipc_params = params.clone();
-            let callipc_sender = sender.clone();
-            let started = SystemTime::now();
-            let mut called = false;
             tokio_runtime.spawn(
               async move {
-                while !called {
-                  let called_response = receiver.recv_timeout(Duration::from_millis(100));
-                  match called_response {
-                    Ok (response) => {
-                      match response {
-                        IPCMsg::Called => {
-                          trace!("PostIPC called");
-                          called = true;
-                        },
-                        IPCMsg::Response { params, mime_type} => {
-                          respond_status(StatusCode::OK, mime_type, params, responder);
-                          return;
-                        }
-                      }
-                    },
-                    Err (_e) => {
-                      match started.elapsed() {
-                        Ok(elapsed) => {
-                          if elapsed.as_secs()>600 {
-                            warn!("PostIPC Call Expired {}", callipc_request_id.clone());
-                            respond_status(StatusCode::GONE, CONTENT_TYPE_JSON.to_string(), "call expired (timeout)".to_string().into_bytes(), responder);
-                            return;
-                          }
-                        },
-                        Err(e) => {
-                          trace!("PostIPC SystemTimeError {}", e.to_string());
-                        }
-                      }
-                      trace!("PostIPC retry");
-                      let _ = callipc_proxy.send_event(
-                        ElectricoEvents::IPCCallRetry { browser_window_id:callipc_browser_window_id.clone(), request_id:callipc_request_id.clone(), params:callipc_params.clone(), sender:callipc_sender.clone() }
-                      );
-                    }
-                  }
-                }
                 let ipc_response = receiver.recv_timeout(Duration::from_secs(600));
                 match ipc_response {
                   Ok (response) => {
-                    match response {
-                      IPCMsg::Response { params ,mime_type} => {
-                        trace!("PostIPC Response {}", params.len());
-                        respond_status(StatusCode::OK, mime_type, params, responder);
-                      },
-                      _ => ()
-                    }
+                    trace!("PostIPC Response {}", response.params.len());
+                    respond_status(StatusCode::OK, response.mime_type, response.params, responder);
                   },
                   Err (_e) => {
                     warn!("PostIPC request expired (timeout): {}", r_request_id.clone());
@@ -226,7 +175,7 @@ fn main() -> wry::Result<()> {
                 }
               }
             );
-            backend.call_ipc_channel(&browser_window_id, &request_id, params, data_blob, sender);
+            backend.call_ipc_channel(browser_window_id, request_id, params, data_blob);
           },
           Command::SetIPCResponse {request_id, file_path} => {
             trace!("backend ExecuteCommand call SetIPCResponse {}", request_id);
@@ -235,9 +184,9 @@ fn main() -> wry::Result<()> {
                 Some(sender) => {
                   if let Some(file_path) = file_path {
                     let mime_type = mime_guess::from_path(file_path).first_or_octet_stream().to_string();
-                    let _ = sender.send(IPCMsg::Response { params:params, mime_type });
+                    let _ = sender.send(IPCResponse::new(params, mime_type));
                   } else {
-                    let _ = sender.send(IPCMsg::Response { params:params, mime_type:CONTENT_TYPE_JSON.to_string() });
+                    let _ = sender.send(IPCResponse::new(params, CONTENT_TYPE_JSON.to_string()));
                   }
                   ipc_channel.end(&request_id);
                 },
@@ -255,7 +204,7 @@ fn main() -> wry::Result<()> {
               trace!("BrowserWindowReadFile {} {}", browser_window_id, file_path);
               for fprot in &frontend.file_protocols {
                 if file_path.starts_with(fprot) {
-                  trace!("file protocol request: {}", fprot);
+                  trace!("file protocol request: {}, {}", fprot, file_path);
                   let _ = proxy.send_event(ElectricoEvents::ExecuteCommand {command:Command::PostIPC {
                     browser_window_id:browser_window_id,
                     request_id:Uuid::new_v4().to_string(),

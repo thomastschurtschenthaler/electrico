@@ -28,7 +28,7 @@ pub fn child_process_spawn(
         .args(pargs).spawn() {
         Ok(mut child) => {
             let (sender, receiver): (Sender<ChildProcess>, Receiver<ChildProcess>) = mpsc::channel();
-            backend.child_process_start(child.id().to_string(), sender.clone());
+            backend.child_process_start(&child.id().to_string(), sender.clone());
             respond_status(StatusCode::OK, CONTENT_TYPE_TEXT.to_string(), child.id().to_string().into_bytes(), responder); 
             tokio_runtime.spawn(
                 async move {
@@ -74,8 +74,8 @@ pub fn child_process_spawn(
                     let (stderr_end_sender, stderr_end_receiver): (Sender<ChildProcess>, Receiver<ChildProcess>) = mpsc::channel();
                     tokio::spawn(async move {
                         trace!("starting stderr");
+                        let stderr_buf:&mut [u8] = &mut [0; 65536];
                         loop {
-                            let stderr_buf:&mut [u8] = &mut [0; 65536];
                             if let Ok(read) = stderr.read(stderr_buf) {
                                 trace!("stderr read {}", read);
                                 if let Ok(d) = stderr_end_receiver.try_recv() {
@@ -101,8 +101,8 @@ pub fn child_process_spawn(
                     let (stdout_end_sender, stdout_end_receiver): (Sender<ChildProcess>, Receiver<ChildProcess>) = mpsc::channel();
                     tokio::spawn(async move {
                         trace!("starting stdoud");
+                        let stdout_buf:&mut [u8] = &mut [0; 65536];
                         loop {
-                            let stdout_buf:&mut [u8] = &mut [0; 65536];
                             if let Ok(read) = stdout.read(stdout_buf) {
                                 trace!("stdout read {}", read);
                                 if let Ok(d) = stdout_end_receiver.try_recv() {

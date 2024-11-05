@@ -92,6 +92,7 @@ pub enum NodeCommand {
   NETCloseConnection {id:String},
   NETCreateConnection {hook:String, id:String},
   NETWriteConnection {id:String},
+  NETSetTimeout {id:String, timeout:u128},
   HTTPRequest {options:HTTPOptions},
   ChildProcessSpawn {cmd: String, args:Option<Vec<String>>},
   ChildProcessStdinWrite {pid: String},
@@ -121,10 +122,12 @@ pub struct ProcessEnv {
   pub electron_is_dev: String,
   #[serde(rename = "HOME")]
   pub home: String,
+  #[serde(rename = "PATH")]
+  pub path: String,
 }
 impl ProcessEnv {
-  pub fn new(node_env: String, electron_is_dev: String, home: String) -> ProcessEnv {
-    ProcessEnv {node_env, electron_is_dev, home}
+  pub fn new(node_env: String, electron_is_dev: String, home: String, path:String) -> ProcessEnv {
+    ProcessEnv {node_env, electron_is_dev, home, path}
   }
 }
 

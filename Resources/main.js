@@ -8,6 +8,8 @@ function writeOutput(text, level) {
   mainWindow.webContents.send("writeOutput", text, level);
 }
 
+console.log("PATH", process.env.PATH);
+
 ipcMain.on('shellcommand', function(event, command) {
   if (command.cmd=="") {
     writeOutput("command empty\n", "error");

@@ -1,4 +1,4 @@
-use std::{fs::{self, OpenOptions}, io::{Read, Seek, SeekFrom, Write}, path::Path, time::SystemTime};
+use std::{env, fs::{self, OpenOptions}, io::{Read, Seek, SeekFrom, Write}, path::Path, time::SystemTime};
 use log::{debug, error, info, trace, warn};
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use reqwest::{header::{ACCESS_CONTROL_ALLOW_ORIGIN, CONTENT_TYPE}, Method, Request, StatusCode, Url};
@@ -93,9 +93,11 @@ pub fn process_node_command(tokio_runtime:&Runtime, app_env:&AppEnv,
             if let Ok(p) = std::env::current_exe() {
                 exec_path = p.as_os_str().to_str().unwrap().to_string();
             }
+            let path = env::var("PATH").unwrap();
+            
             let process_info = Process::new(platform.to_string(), 
                 ProcessVersions::new(node, chrome, electron), 
-                ProcessEnv::new(node_env, electron_is_dev, home),
+                ProcessEnv::new(node_env, electron_is_dev, home, path),
                 app_env.resources_path.clone(),
                 exec_path,
                 app_env.start_args.clone()
@@ -505,6 +507,11 @@ pub fn process_node_command(tokio_runtime:&Runtime, app_env:&AppEnv,
                 respond_status(StatusCode::INTERNAL_SERVER_ERROR, CONTENT_TYPE_TEXT.to_string(), format!("NETWriteConnection error, no data").into_bytes(), responder);
             }
         },
+        NodeCommand::NETSetTimeout { id, timeout } => {
+            trace!("NETSetTimeout {}, {}", id, timeout);
+            backend.net_set_timeout(id, timeout);
+            respond_ok(responder);
+        }
         NodeCommand::GetDataBlob { id } => {
             if let Some(data) = backend.get_data_blob(id) {
                 respond_status(StatusCode::OK, CONTENT_TYPE_BIN.to_string(), data, responder);

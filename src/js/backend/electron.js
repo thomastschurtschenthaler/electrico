@@ -240,6 +240,9 @@
             this.setTouchBar = (b => {
                 //TODO
             }).bind(this);
+            this.setBackgroundColor = (c => {
+                //TODO
+            }).bind(this);
             this.setDocumentEdited = ((ed) => {
                 this._documentEdited = ed;
             }).bind(this);
@@ -413,6 +416,10 @@
                         if (e!=null) throw e;
                         window.__electrico.file_protocol[schema] = (requestID, request) => {
                             //console.log("file_protocol call", requestID, request);
+                            if (!request.url.substring(schema.length).startsWith("//")) {
+                                request.url = schema+"/"+request.url.substring(schema.length);
+                                console.log("file_protocol added /", request.url);
+                            }
                             handler(request, (response) => {
                                 //console.log("file_protocol call handler response", request, response);
                                 let file_path = response.mimeType==null?response.path:null;

@@ -107,7 +107,7 @@
                     if (e!==null) {
                         throw "mkdir failed: "+path;
                     } else {
-                        cb(r);
+                        cb(null, r);
                     }
                 });
             },
@@ -634,9 +634,15 @@
                                 end();
                             }
                         }).bind(this);
+                        this.setTimeout = ((t => {
+                            $e_node.asyncNETSetTimeout({"id":id, "timeout":t});
+                        })).bind(this);
                         this._connection_end = (id => {
                             this.emit("end");
                             delete window.__electrico.net_server[id];
+                        }).bind(this);
+                        this._connection_timeout = (id => {
+                            this.emit("timeout");
                         }).bind(this);
                     }
                 }

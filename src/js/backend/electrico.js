@@ -175,15 +175,6 @@ var __electrico_nonce=null;
         }, 0);
         return event;
     }
-    function exctractIPCParams(argumentsstr) {
-        let sep_browserwindow = argumentsstr.indexOf("@");
-        let sep_requestid = argumentsstr.indexOf("@@");
-        return {
-            browserWindowID: argumentsstr.substring(0, sep_browserwindow),
-            requestID: argumentsstr.substring(sep_browserwindow+1, sep_requestid),
-            arguments: JSON.parse(argumentsstr.substring(sep_requestid+2, argumentsstr.length))
-        }
-    }
     window.__electrico={
         file_protocol: {},
         app_menu:{},
@@ -293,37 +284,37 @@ var __electrico_nonce=null;
                 require(main);
             //}, 1000);
         },
-        callIPCChannel: (argumentsstr) => {
-            let p = exctractIPCParams(argumentsstr);
-            let channel = p.arguments[0];
-            let resp = null;
-            delete window.__electrico.error;
-            let timeout = {
-                "cleared": false,
-                trigger: function() {
-                    if (!timeout.cleared) {
-                        if (resp==null && window.__electrico.error!=null) {
-                            console.error("callChannel script error", channel, window.__electrico.error);
-                            delete window.__electrico.error;
-                            sendIPCResponse(p.requestID, null);
-                        } else {
-                            setTimeout(timeout.trigger, 1000);
+        callIPCChannel: (browserWindowID, requestID, argumentsstr) => {
+            setTimeout(()=>{
+                let arguments = JSON.parse(argumentsstr);
+                let channel = arguments[0];
+                let resp = null;
+                delete window.__electrico.error;
+                let timeout = {
+                    "cleared": false,
+                    trigger: function() {
+                        if (!timeout.cleared) {
+                            if (resp==null && window.__electrico.error!=null) {
+                                console.error("callChannel script error", channel, window.__electrico.error);
+                                delete window.__electrico.error;
+                                sendIPCResponse(requestID, null);
+                            } else {
+                                setTimeout(timeout.trigger, 1000);
+                            }
                         }
                     }
-                }
-            };
-            setTimeout(timeout.trigger, 1000);
-            setTimeout(()=>{
+                };
+                setTimeout(timeout.trigger, 1000);
                 let doCall = () => {
-                    let event = callChannel(timeout, p.browserWindowID, p.requestID, ...p.arguments);
+                    let event = callChannel(timeout, browserWindowID, requestID, ...arguments);
                     if (event.returnValue!=null) {
                         resp=event.returnValue;
                     }
                 };
-                if (p.arguments.length>1 && p.arguments[1]._electrico_buffer_id!=null) {
-                    $e_node.asyncGetDataBlobBin({"id":p.arguments[1]._electrico_buffer_id}).then((e, r)=>{
+                if (arguments.length>1 && arguments[1]._electrico_buffer_id!=null) {
+                    $e_node.asyncGetDataBlobBin({"id":arguments[1]._electrico_buffer_id}).then((e, r)=>{
                         let Buffer = require('buffer').Buffer;
-                        p.arguments[1] = Buffer.from(r);
+                        arguments[1] = Buffer.from(r);
                         doCall();
                     });
                 } else {
@@ -482,6 +473,9 @@ var __electrico_nonce=null;
                     _this.neutered_ports[msg.portid].postMessage(msg.data, msg.ports);
                 } else {
                     let eport = msg.portid!=null?_this.received_ports[msg.portid]:_this;
+                    if (eport==null) {
+                        console.error("ProcessPort.onMessageReceived no received port for portid", msg);
+                    }
                     delete msg.portid;
                     if (eport.started) {
                         eport.emit("message", _this.flatten!=null?_this.flatten(msg):msg);

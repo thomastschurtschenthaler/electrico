@@ -1,7 +1,7 @@
 use std::sync::mpsc::Sender;
 use notify::Event;
 use wry::RequestAsyncResponder;
-use crate::{electron::types::ElectronCommand, ipcchannel::IPCMsg, node::types::NodeCommand};
+use crate::{electron::types::ElectronCommand, node::types::NodeCommand};
 
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct Resources {
@@ -50,6 +50,7 @@ pub enum ChildProcess {
 
 pub enum NETConnection {
   Write {data: Vec<u8>},
+  SetTimeout {timeout: Option<u128>},
   Disconnect,
   EndConnection
 }
@@ -59,6 +60,7 @@ pub enum NETServer {
 }
 
 pub enum BackendCommand {
+  IPCCall {browser_window_id:String, request_id:String, params:String},
   ChildProcessCallback {pid:String, stream:String, data:Option<Vec<u8>>},
   ChildProcessExit {pid:String, exit_code:Option<i32>},
   FSWatchEvent {wid:String, event:Event},
@@ -95,7 +97,6 @@ pub enum FrontendCommand {
 pub enum ElectricoEvents {
   ExecuteCommand {command: Command, responder: RequestAsyncResponder, data_blob:Option<Vec<u8>>},
   FrontendNavigate {browser_window_id:String, page: String, preload: String},
-  IPCCallRetry {browser_window_id:String, request_id:String, params:String, sender:Sender<IPCMsg>},
   SendChannelMessageRetry { browser_window_id:String, rid:String, channel:String, args:String},
   Exit,
   Noop

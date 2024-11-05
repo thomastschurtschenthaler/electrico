@@ -1,14 +1,13 @@
 use std::{any::Any, collections::HashMap, fs::File, path::PathBuf, sync::mpsc::{self, Receiver, Sender}};
 use muda::MenuId;
 use notify::{Event, RecommendedWatcher};
-use rusqlite::Connection;
 use substring::Substring;
 use log::{debug, error, trace};
 use include_dir::{include_dir, Dir};
 use tao::{dpi::PhysicalSize, event_loop::{EventLoop, EventLoopProxy}, window::{Window, WindowBuilder}};
 use wry::{http::Request, RequestAsyncResponder, WebView, WebViewBuilder};
 use serde_json::Error;
-use crate::{common::{append_js_scripts, build_file_map, escape, get_message_data, handle_file_request, is_module_request, respond_404, DataQueue}, ipcchannel::IPCMsg, types::{BackendCommand, ChildProcess, NETConnection, NETServer}};
+use crate::{common::{append_js_scripts, build_file_map, escape, get_message_data, handle_file_request, is_module_request, respond_404, DataQueue}, types::{BackendCommand, ChildProcess, NETConnection, NETServer}};
 use crate::types::{Package, ElectricoEvents, Command};
 
 pub struct Backend {
@@ -159,22 +158,21 @@ impl Backend {
     pub fn command_callback(&mut self, command:String, message:String) {
         let _ = self.webview.evaluate_script(format!("window.__electrico.callback['{}']('{}')", command, message).as_str());
     }
-    pub fn call_ipc_channel(&mut self, browser_window_id:&String, request_id:&String, params:String, data_blob:Option<Vec<u8>>, sender:Sender<IPCMsg>) {
+    pub fn call_ipc_channel(&mut self, browser_window_id:String, request_id:String, params:String, data_blob:Option<Vec<u8>>) {
          let request_id2 = request_id.clone();
          trace!("call_ipc_channel {} {}", &request_id2, &params);
          if let Some(data) = data_blob {
-            self.data_queue.add(request_id, data);
+            self.data_queue.add(&request_id, data);
         }
+        let retry_sender = self.command_sender.clone();
          _ = self.webview.evaluate_script_with_callback(
-            format!("window.__electrico.callIPCChannel('{}@{}@@{}');", browser_window_id, request_id, escape(&params)).as_str()
+            format!("window.__electrico.callIPCChannel('{}', '{}', '{}');", browser_window_id, request_id, escape(&params)).as_str()
             , move |r| {
-                if r.len()>0 {
-                    let _ = sender.send(IPCMsg::Called);
-                    trace!("call_ipc_channel OK {}", &request_id2);
-                } else {
-                    trace!("call_ipc_channel not OK {}", &request_id2);
+                if r.len()==0 {
+                    trace!("call_ipc_channel not OK - resending");
+                    let _ = retry_sender.send(BackendCommand::IPCCall { browser_window_id:browser_window_id.clone(), request_id:request_id.clone(), params:params.clone() });
                 }
-            });
+        });
     }
     pub fn window_close(&mut self, id:&Option<String>) {
         if let Some(id) = id {
@@ -245,9 +243,9 @@ impl Backend {
     pub fn command_sender(&mut self) -> Sender<BackendCommand> {
         self.command_sender.clone()
     }
-    pub fn child_process_start(&mut self, pid:String, sender:Sender<ChildProcess>) {
+    pub fn child_process_start(&mut self, pid:&String, sender:Sender<ChildProcess>) {
         trace!("child_process_start {}", pid);
-        self.child_process.insert(pid, sender);
+        self.child_process.insert(pid.clone(), sender);
     }
     pub fn child_process_disconnect(&mut self, pid:String) {
         trace!("child_process_disconnect {}", pid);
@@ -338,6 +336,13 @@ impl Backend {
             error!("net_write_connection no sender for id {}", id);
         }
     }
+    pub fn net_set_timeout(&mut self, id:String, timeout:u128) {
+        if let Some(sender) = self.net_connections.get(&id) {
+            let _ = sender.send(NETConnection::SetTimeout { timeout:Some(timeout) });
+        } else {
+            error!("net_write_connection no sender for id {}", id);
+        }
+    }
     pub fn get_data_blob(&mut self, id:String) -> Option<Vec<u8>> {
         let data:Option<Vec<u8>>;
         if let Some(d) = self.data_queue.take(&id) {
@@ -350,6 +355,9 @@ impl Backend {
     pub fn process_commands(&mut self) {
         if let Ok(command) = self.command_receiver.try_recv() {
             match command {
+                BackendCommand::IPCCall { browser_window_id, request_id, params } => {
+                    self.call_ipc_channel(browser_window_id, request_id, params, None);
+                },
                 BackendCommand::ChildProcessCallback { pid, stream, data } => {
                     trace!("ChildProcessCallback");
                     self.child_process_callback(pid, stream, data);
@@ -391,5 +399,8 @@ impl Backend {
     pub fn shutdown(&mut self) {
         self.fs_watcher.clear();
         self.fs_files.clear();
+        self.net_server.clear();
+        self.net_connections.clear();
+        self.addon_state.clear();
     }
 }

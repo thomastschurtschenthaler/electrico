@@ -24,7 +24,11 @@
             if (lib!=null) {
                 return lib;
             }
-            var module = {exports:{}}; var exports = {__electrico_deferred:[]};
+            var module = {exports:{__default:{}}}; var exports = {__electrico_deferred:[], __default:{}};
+            var __e_exports = function(d) {
+                if (d=="") return exports;
+                return exports.__default;
+            };
             let module_path = _this!=null?_this.__import_mpath:"";
             let expanded_path = module_path;
             if (mpath.startsWith(".")) {
@@ -100,7 +104,10 @@
                     }
                     delete exports.__electrico_deferred;
                 }
-                exported = (module.exports!=null && ((typeof module.exports=="function") || Object.keys(module.exports).length>0))?module.exports:exports;
+                exported = (module.exports!=null && ((typeof module.exports=="function") || ((Object.keys(module.exports).length>0 && module.exports.__default==null) || (Object.keys(module.exports).length>1 && module.exports.__default!=null))))?module.exports:exports;
+                for (let k in exported.__default) {
+                    exported[k] = exported.__default[k];
+                }
             }
             if (cache) {
                 window.__electrico.module_cache[cache_path]=exported;
@@ -110,6 +117,7 @@
         window.__Import=function(_this, selector, mpath, doExport, exports) {
             //console.log("__import", mpath, selector);
             let mod = loadModule(_this, mpath, true);
+            
             let toEval="";
             if (selector!=null) {
                 selector = selector.trim();
@@ -132,8 +140,8 @@
                         if (!vlnames && parts.length==1) {
                             if (mod==null) {
                                 console.warn("mod null:", mpath);
-                            } else if (Object.keys(mod).length==1) {
-                                vlname =  Object.keys(mod)[0];
+                            } else if (mod.__default !=null && Object.keys(mod.__default).length==1) {
+                                vlname =  Object.keys(mod.__default)[0];
                                 vlnames = true;
                             }
                         }
@@ -187,9 +195,10 @@
             script = script.replaceAll(/\export +(var ) *(([^{ ,;,\n}]*))(.*);/g, export_try_deferred);
             script = script.replaceAll(/\export +(let ) *(([^{ ,;,\n}]*))(.*);/g, export_try_deferred);
             script = script.replaceAll(/\export +(const ) *(([^{ ,;,\n}]*))(.*);/g, export_try_deferred);
-            script = script.replaceAll(/\export +(default )?(const )?(var )?(let )? *(([^{ ,;,\n}]*))(.*);/g, "exports['$6']=$6$7;");
 
-            script = script.replaceAll(/\export +(default)?(const)? *((async +function)?(function)?(function\*)?(async +function\*)?(class)? +([^{ ,(,;,\n}]*))/g, "exports['$9']=$9=$3");
+            script = script.replaceAll(/\export +(default )?(const )?(var )?(let )? *(([^{ ,;,\n}]*))(.*);/g,"__e_exports('$1')['$6']=$6$7;");
+
+            script = script.replaceAll(/\export +(default)?(const)? *((async +function)?(function)?(function\*)?(async +function\*)?(class)? +([^{ ,(,;,\n}]*))/g, "__e_exports('$1')['$9']=$9=$3");
             script = script.replaceAll('"use strict"', "");
             script = script.replaceAll(/[\r,\n] *}[\r,\n] *\(function/g, "\n};\n(function"); // Color
 

@@ -1,4 +1,4 @@
-use std::{fs, path::Path, sync::mpsc::{self, Receiver, Sender}, time::Duration};
+use std::{fs, path::Path, sync::mpsc::{self, Receiver, Sender}, time::{Duration, SystemTime}};
 
 use interprocess::local_socket::{ToFsName, traits::tokio::{Listener, Stream}, GenericFilePath, ListenerOptions};
 use reqwest::StatusCode;
@@ -104,6 +104,11 @@ pub fn ipc_connection(
     }
 }
 
+enum SendTimeout {
+    Timedout,
+    SetTimout {timeout: Option<u128>}
+}
+
 fn ipc_connect(id:&String, c:interprocess::local_socket::tokio::Stream, 
             receiver:Receiver<NETConnection>,
             proxy: EventLoopProxy<ElectricoEvents>,
@@ -117,17 +122,25 @@ fn ipc_connect(id:&String, c:interprocess::local_socket::tokio::Stream,
     let w_proxy = proxy.clone();
     let w_command_sender = command_sender.clone();
     let w_id=id.clone();
-    let (timeout_sender, timeout_receiver): (Sender<bool>, Receiver<bool>) = mpsc::channel();
-                                        
+    let (timeout_sender, timeout_receiver): (Sender<SendTimeout>, Receiver<SendTimeout>) = mpsc::channel();
+
+                   
     tokio::spawn(async move {
         loop {
             trace!("NETConnection::write loop {}", w_id);
-            match receiver.recv_timeout(Duration::from_secs(300)) {
+            let mut time_out:Option<u128> = None;
+            let mut time_idle = SystemTime::now();
+            match receiver.recv_timeout(Duration::from_secs(1)) {
                 Ok(r) => {
                     match r {
                         NETConnection::Write { data } => {
                             trace!("NETConnection::Write {}", w_id);
+                            time_idle = SystemTime::now();
                             let _ = writer.write(&data.to_vec()).await;
+                        },
+                        NETConnection::SetTimeout { timeout } => {
+                            time_out = timeout;
+                            let _ = timeout_sender.send(SendTimeout::SetTimout { timeout });
                         },
                         NETConnection::Disconnect => {
                             trace!("NETConnection::Disconnect {}", w_id);
@@ -140,8 +153,14 @@ fn ipc_connect(id:&String, c:interprocess::local_socket::tokio::Stream,
                     }
                 },
                 Err(_e) => {
-                    trace!("NETConnection::receive_timeout {}", w_id);
-                    let _ = timeout_sender.send(true);
+                    if let Some(timeout) = time_out {
+                        if let Ok(elapsed) = time_idle.elapsed() {
+                            if elapsed.as_millis()>timeout {
+                                trace!("NETConnection::receive_timeout {}", w_id);
+                                let _ = timeout_sender.send(SendTimeout::Timedout);
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -149,15 +168,18 @@ fn ipc_connect(id:&String, c:interprocess::local_socket::tokio::Stream,
     });
     let mut buffer:Vec<u8> = vec![0; 65536];
     tokio::spawn(async move {
+        let mut time_out:Option<u128> = None;
+        let mut time_idle = SystemTime::now();
         loop {
             trace!("NETConnection::read loop {}", r_id);
-            match timeout(Duration::from_secs(300),  reader.read(&mut buffer)).await {
+            match timeout(Duration::from_secs(1),  reader.read(&mut buffer)).await {
                 Ok(r) => {
                     match r {
                         Ok(read) => {
                             trace!("send data for NETConnection read {}", r_id);
                             if read>0 {
                                 trace!("send data for NETConnection stream {}", r_id);
+                                time_idle = SystemTime::now();
                                 let _ = send_command(&r_proxy, &r_command_sender, BackendCommand::NETConnectionData {id:r_id.clone(), data: Some(buffer[0..read].to_vec()) });
                             } else {
                                 trace!("NETConnection stream end {}", r_id);
@@ -180,8 +202,24 @@ fn ipc_connect(id:&String, c:interprocess::local_socket::tokio::Stream,
                     }
                 }
             }
-            if let Ok(_t) = timeout_receiver.try_recv() {
-                trace!("write timeout, but no read timeout")
+            if let Ok(st) = timeout_receiver.try_recv() {
+                match st {
+                    SendTimeout::SetTimout { timeout } => {
+                        time_out = timeout;
+                    },
+                    SendTimeout::Timedout => {
+                        if let Some(timeout) = time_out {
+                            if let Ok(elapsed) = time_idle.elapsed() {
+                                if elapsed.as_millis()>timeout {
+                                    trace!("write and read timeout");
+                                    let _ = send_command(&r_proxy, &r_command_sender, BackendCommand::NETConnectionEnd { id:r_id.clone() });
+                                    break;
+                                }
+                            }
+                        }
+                        trace!("write timeout, but no read timeout")
+                    }
+                }
             }
         }
         trace!("NETConnection read end {}", r_id);

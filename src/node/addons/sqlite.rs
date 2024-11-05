@@ -137,7 +137,7 @@ pub fn process_sqllite_command(_tokio_runtime:&Runtime, _app_env:&AppEnv,
                             let mut mres_row:HashMap<String, String> = HashMap::new();
                             let mut ix = 0;
                             for v in r {
-                                mres_row.insert(s.column_name(ix).unwrap().to_string(), v.clone());
+                                mres_row.insert(s.column_name(ix).unwrap().to_string(), v);
                                 ix+=1;
                             }
                             mres.push(mres_row);
