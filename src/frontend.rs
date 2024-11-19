@@ -2,6 +2,7 @@ use log::{debug, error, trace, warn};
 use include_dir::{include_dir, Dir};
 use reqwest::StatusCode;
 use substring::Substring;
+use uuid::Uuid;
 use std::{collections::HashMap, fs, path::PathBuf};
 use tao::{dpi::{LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize}, event_loop::{EventLoopProxy, EventLoopWindowTarget}, window::{Icon, Window, WindowBuilder, WindowId}};
 use serde_json::Error;
@@ -35,7 +36,7 @@ pub struct Frontend {
     frontendalljs:String,
     rsrc_dir:PathBuf,
     data_queue:DataQueue,
-    pub file_protocols:Vec<String>,
+    file_protocols:Vec<String>,
 }
 impl Frontend {
     pub fn new(rsrc_dir:PathBuf) -> Frontend {
@@ -53,7 +54,7 @@ impl Frontend {
             data_queue:DataQueue::new()
         }
     }
-    pub fn create_window(&mut self, id:String, event_loop:&EventLoopWindowTarget<ElectricoEvents>, proxy:EventLoopProxy<ElectricoEvents>, config_params:BrowserWindowCreateParam) {
+    pub fn create_window<'a>(&mut self, id:String, event_loop:&EventLoopWindowTarget<ElectricoEvents>, proxy:EventLoopProxy<ElectricoEvents>, config_params:BrowserWindowCreateParam) {
         let ipc_proxy = proxy.clone();
         let ipc_handler_id = id.clone();
         let ipc_handler = move |request: Request<Vec<u8>>, responder:RequestAsyncResponder| {
@@ -181,21 +182,6 @@ impl Frontend {
             }
         }
 
-        let fil_handler_id = id.clone();
-        let fil_handler = move |request: Request<Vec<u8>>, responder:RequestAsyncResponder| {
-            let mut fpath = request.uri().path().to_string();
-            if fpath.starts_with("/") {
-                fpath = fpath.substring(1, fpath.len()).to_string();
-            }
-            fpath = fpath.replace("..", "");
-            trace!("frontend fil: fpath {}", fpath);
-            let _ = proxy.send_event(ElectricoEvents::ExecuteCommand {command:Command::BrowserWindowReadFile {
-                browser_window_id:fil_handler_id.clone(), 
-                file_path: fpath, 
-                module:is_module_request(request.uri().host())
-            }, responder, data_blob:None});
-        };
-
         let mut is_windows="false";
         #[cfg(target_os = "windows")] {
             is_windows = "true";
@@ -207,7 +193,7 @@ impl Frontend {
             target_os = "ios",
             target_os = "android"
         ))]
-        let builder = WebViewBuilder::new(&window);
+        let mut webview_builder = WebViewBuilder::new(&window);
     
         #[cfg(not(any(
             target_os = "windows",
@@ -215,24 +201,54 @@ impl Frontend {
             target_os = "ios",
             target_os = "android"
         )))]
-        let builder = {
+        let mut webview_builder = {
             use tao::platform::unix::WindowExtUnix;
             use wry::WebViewBuilderExtUnix;
             let vbox = window.default_vbox().unwrap();
             WebViewBuilder::new_gtk(vbox)
         };
-
-        let webview = builder
+        
+        for schema in &self.file_protocols {
+            let fp_proxy = proxy.clone();
+            let fp_id = id.clone();
+            let fp_schema = schema.clone();
+            webview_builder = webview_builder.with_asynchronous_custom_protocol(
+                schema.into(), 
+                move |request: Request<Vec<u8>>, responder:RequestAsyncResponder| {
+                    let fpath = request.uri().path();
+                    trace!("custom file protocol request: {}, {}", fp_schema, fpath);
+                    let _ = fp_proxy.send_event(ElectricoEvents::ExecuteCommand {command:Command::PostIPC {
+                        browser_window_id:fp_id.clone(),
+                        request_id:Uuid::new_v4().to_string(),
+                        params: format!("[\"__electrico_protocol\", \"{}\", \"{}\"]", fp_schema, fpath)
+                    }, responder, data_blob:None});   
+            });
+        }
+        let fil_handler_id = id.clone();
+        let fil_handler_proxy = proxy.clone();
+        let fil_handler = move |request: Request<Vec<u8>>, responder:RequestAsyncResponder| {
+            let mut fpath = request.uri().path().to_string();
+            if fpath.starts_with("/") {
+                fpath = fpath.substring(1, fpath.len()).to_string();
+            }
+            fpath = fpath.replace("..", "");
+            trace!("frontend fil: fpath {}", fpath);
+            let _ = fil_handler_proxy.send_event(ElectricoEvents::ExecuteCommand {command:Command::BrowserWindowReadFile {
+                browser_window_id:fil_handler_id.clone(), 
+                file_path: fpath, 
+                module:is_module_request(request.uri().host())
+            }, responder, data_blob:None});
+        };
+        let webview = webview_builder
             .with_asynchronous_custom_protocol("fil".into(), fil_handler)
             .with_asynchronous_custom_protocol("ipc".into(), ipc_handler)
             .with_initialization_script(("window.__is_windows=".to_string()+is_windows+";var __electrico_nonce='"+config_params.id.clone().as_str()+"'; window.__electrico_preload=function(document, ph){\nph.before(__electrico_nonce); var window=document.window; var process=window.process; var require=document.window.require;\n"+preload_script.as_str()+"\nph.after();\n};\n"+self.frontendalljs.as_str()+"\n__electrico_nonce='';\n").as_str())
             .with_navigation_handler(nav_handler)
             .with_devtools(true)
             .build().unwrap();
-
         #[cfg(debug_assertions)]
         webview.open_devtools();
-
+        
         let w_id = window.id().clone();
         self.window_ids.insert(window.id().clone(), config_params.id.clone());
         let fwindow: FrontendWindow = FrontendWindow::new(window, webview, w_id);
@@ -246,20 +262,20 @@ impl Frontend {
                 window.set_client_path_base(Some(self.rsrc_dir.clone()));
                 #[cfg(not(debug_assertions))]
                 window.set_client_path_base(None);
-                
                 let _ = window.webview.load_url(fpath.as_str());
             } else {
-                let mut url="fil://file/";
-                #[cfg(target_os = "windows")] {
-                    url = "http://fil.file/";
+                let mut url=fpath.clone();
+                if let None = fpath.find("://") {
+                    url = "fil://file/".to_string()+url.as_str();
                 }
-                if let Some(_) = fpath.find(":") {
-                    //url = "";
+                #[cfg(target_os = "windows")] {
+                    if let Some(ix) = fpath.find("://") {
+                        url = format!("http://{}.{}", url.substring(0, ix), url.substring(ix+3, url.len()));
+                    }
                 }
                 window.set_client_path_base(Some(self.rsrc_dir.clone()));
-                let _ = window.webview.load_url((url.to_string() + fpath.as_str()).as_str());
+                let _ = window.webview.load_url(url.as_str());
             }
-            
         } else {
             error!("load_url - frontend_webview not there - id: {}", id);
         }

@@ -1,16 +1,17 @@
 use std::{process::{Command, Stdio}, sync::mpsc::{self, Receiver, Sender}, time::Duration};
 
 use log::{debug, error, trace};
+use portable_pty::CommandBuilder;
 use reqwest::StatusCode;
 use tao::event_loop::EventLoopProxy;
 use tokio::runtime::Runtime;
 use wry::RequestAsyncResponder;
 use std::io::{Read, Write};
 
-use crate::{backend::Backend, common::{respond_client_error, respond_status, CONTENT_TYPE_TEXT}, node::common::send_command, types::{BackendCommand, ChildProcess, ElectricoEvents}};
+use crate::{backend::Backend, common::{respond_404, respond_client_error, respond_status, CONTENT_TYPE_TEXT}, node::common::send_command, types::{BackendCommand, ChildProcess, ElectricoEvents}};
 
 pub fn child_process_spawn(
-        cmd:String, 
+        cmd_in:Option<String>, 
         args:Option<Vec<String>>,
         backend:&mut Backend,
         tokio_runtime:&Runtime,
@@ -20,6 +21,17 @@ pub fn child_process_spawn(
     let mut pargs:Vec<String> = Vec::new();
     if let Some(args) = args {
         pargs = args;
+    }
+    let cmd:String;
+    if let Some(cmd_in) = cmd_in {
+        cmd = cmd_in;
+    } else {
+        #[cfg(unix)] {
+            cmd = "sh".to_string();
+        }
+        #[cfg(not(unix))] {
+            cmd = "powershell".to_string();
+        }
     }
     match Command::new(cmd)
         .stdin(Stdio::piped())

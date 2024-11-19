@@ -8,14 +8,6 @@
                 setTimeout(cb, 0);
             }
         }
-        let _encodeURI = window.encodeURI;
-        window.encodeURI = (uri) => {
-            let ix = uri.indexOf("://");
-            if (ix>=0 && window.location.href.startsWith("fil://file/"+uri.substring(0, ix+3))) {
-                uri = "fil://file/"+uri;
-            }
-            return _encodeURI(uri);
-        }
         __init_shared(window);
         window.alert = (msg) => {
             const req = new XMLHttpRequest();

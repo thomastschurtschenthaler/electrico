@@ -1,4 +1,4 @@
-use std::time::SystemTime;
+use std::{collections::HashMap, time::SystemTime};
 
 #[derive(serde::Serialize, serde::Deserialize)]
 pub enum ConsoleLogLevel {
@@ -26,16 +26,15 @@ pub struct FSOptions {
 
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct FSDirent {
+  pub path: String,
   pub name: String,
   #[serde(rename = "isDirectory")]
   pub is_directory: bool,
-  #[serde(rename = "isFile")]
-  pub is_file: bool,
 }
 
 impl FSDirent {
-  pub fn new(name: String, is_directory: bool) -> FSDirent {
-    FSDirent {name, is_directory, is_file:!is_directory}
+  pub fn new(path:String, name: String, is_directory: bool) -> FSDirent {
+    FSDirent {path, name, is_directory}
   }
 }
 
@@ -94,7 +93,7 @@ pub enum NodeCommand {
   NETWriteConnection {id:String},
   NETSetTimeout {id:String, timeout:u128},
   HTTPRequest {options:HTTPOptions},
-  ChildProcessSpawn {cmd: String, args:Option<Vec<String>>},
+  ChildProcessSpawn {cmd: Option<String>, args:Option<Vec<String>>},
   ChildProcessStdinWrite {pid: String},
   ChildProcessDisconnect {pid: String},
   GetDataBlob {id: String},
@@ -115,35 +114,19 @@ impl ProcessVersions {
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
-pub struct ProcessEnv {
-  #[serde(rename = "NODE_ENV")]
-  pub node_env: String,
-  #[serde(rename = "ELECTRON_IS_DEV")]
-  pub electron_is_dev: String,
-  #[serde(rename = "HOME")]
-  pub home: String,
-  #[serde(rename = "PATH")]
-  pub path: String,
-}
-impl ProcessEnv {
-  pub fn new(node_env: String, electron_is_dev: String, home: String, path:String) -> ProcessEnv {
-    ProcessEnv {node_env, electron_is_dev, home, path}
-  }
-}
-
-#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Process {
   pub platform: String,
   pub versions: ProcessVersions,
-  pub env: ProcessEnv,
+  pub env: HashMap<String, String>,
   #[serde(rename = "resourcesPath")]
   pub resources_path: String,
   #[serde(rename = "execPath")]
   pub exec_path: String,
-  pub argv: Vec<String>
+  pub argv: Vec<String>,
+  pub pid: u32
 }
 impl Process {
-  pub fn new(platform:String, versions:ProcessVersions, env: ProcessEnv, resources_path: String, exec_path:String, argv: Vec<String>) -> Process {
-    Process {platform, versions, env, resources_path, exec_path, argv}
+  pub fn new(platform:String, versions:ProcessVersions, env: HashMap<String, String>, resources_path: String, exec_path:String, argv: Vec<String>, pid: u32) -> Process {
+    Process {platform, versions, env, resources_path, exec_path, argv, pid}
   }
 }

@@ -15,13 +15,16 @@
             if (e!=null) {
                 throw "PTY.spawn: "+e;
             }
+            pcp = {
+                on: {}
+            }
+            window.__electrico.child_process[id] = pcp;
             let ptyProcess = {
+                pid:parseInt(r),
                 onData: (cb) => {
-                    window.__electrico.child_process[id] = {
-                        stdout_on: {
-                            data: (data) => {
-                                cb(data);
-                            }
+                    pcp.stdout_on = {
+                        data: (data) => {
+                            cb({data:data});
                         }
                     }
                 },
@@ -34,6 +37,11 @@
                 resize: (cols, rows) => {
                     // TODO
                     console.log("ptyProcess.resize", cols, rows);
+                },
+                onExit: (cb) => {
+                    pcp.on.close = (exit_code)=> {
+                        cb(exit_code);
+                    }
                 }
             }
             

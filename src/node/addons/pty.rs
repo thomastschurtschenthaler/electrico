@@ -1,12 +1,13 @@
 use std::{io::{Read, Write}, sync::mpsc::{self, Receiver, Sender}, time::Duration};
 
-use log::trace;
+use log::{debug, trace};
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+use reqwest::StatusCode;
 use tao::event_loop::EventLoopProxy;
 use tokio::runtime::Runtime;
 use wry::RequestAsyncResponder;
 
-use crate::{backend::Backend, common::{respond_404, respond_ok}, node::{common::send_command, node::AppEnv}, types::{BackendCommand, ChildProcess, ElectricoEvents}};
+use crate::{backend::Backend, common::{respond_404, respond_ok, respond_status, CONTENT_TYPE_TEXT}, node::{common::send_command, node::AppEnv}, types::{BackendCommand, ChildProcess, ElectricoEvents}};
 
 use super::types::PTYCommand;
 
@@ -31,7 +32,14 @@ pub fn process_pty_command(tokio_runtime:&Runtime, _app_env:&AppEnv,
                     cmd.args(args);
                     cmd.cwd(opt.cwd);
                     match pair.slave.spawn_command(cmd) {
-                        Ok(_child) => {
+                        Ok(mut child) => {
+                            if let Some(pid) = child.process_id() {
+                                respond_status(StatusCode::OK, CONTENT_TYPE_TEXT.to_string(), format!("{}", pid).into_bytes(), responder);
+                            } else {
+                                log::error!("PTYCommand process_id() Error");
+                                respond_404(responder);
+                                return;
+                            }
                             let (sender, receiver): (Sender<ChildProcess>, Receiver<ChildProcess>) = mpsc::channel();
                             backend.child_process_start(&id, sender.clone());
 
@@ -57,16 +65,24 @@ pub fn process_pty_command(tokio_runtime:&Runtime, _app_env:&AppEnv,
                                             return;
                                         }
                                     }
+                                    
                                     let (read_end_sender, read_end_receiver): (Sender<ChildProcess>, Receiver<ChildProcess>) = mpsc::channel();
                                     let write_proxy = proxy.clone();
                                     let write_command_sender = command_sender.clone();
                                     let write_id = id.clone();
+
+                                    let mut exit_code:Option<i32> = None;
+
                                     tokio::spawn(async move {
                                         trace!("PTYCommand read");
                                         let stdout_buf:&mut [u8] = &mut [0; 65536];
                                         loop {
                                             if let Ok(read) = reader.read(stdout_buf) {
                                                 trace!("PTYCommand bytes read {}", read);
+                                                if read>0 {
+                                                    let data:Vec<u8> = stdout_buf[0..read].to_vec();
+                                                    let _ = send_command(&proxy, &command_sender, BackendCommand::ChildProcessCallback { pid:id.clone(), stream:"stdout".to_string(), data:Some(data) });
+                                                }
                                                 if let Ok(d) = read_end_receiver.try_recv() {
                                                     match d {
                                                         ChildProcess::Disconnect => {
@@ -74,10 +90,6 @@ pub fn process_pty_command(tokio_runtime:&Runtime, _app_env:&AppEnv,
                                                         },
                                                         _ => ()
                                                     }
-                                                }
-                                                if read>0 {
-                                                    let data:Vec<u8> = stdout_buf[0..read].to_vec();
-                                                    let _ = send_command(&proxy, &command_sender, BackendCommand::ChildProcessCallback { pid:id.clone(), stream:"stdout".to_string(), data:Some(data) });
                                                 }
                                             }
                                         }
@@ -97,13 +109,23 @@ pub fn process_pty_command(tokio_runtime:&Runtime, _app_env:&AppEnv,
                                                     _ =>()
                                                 }
                                             }
+                                            if let Ok(exit) = child.try_wait() {
+                                                if let Some(exit) = exit {
+                                                    debug!("pty exit"); 
+                                                    if let Ok(code) = i32::try_from(exit.exit_code()) {
+                                                        exit_code = Some(code);
+                                                        debug!("pty exit code: {}", code);    
+                                                    }
+                                                    let _ = read_end_sender.send(ChildProcess::Disconnect);
+                                                    break;
+                                                }
+                                            }
                                         }
                                         trace!("PTYCommand spawn exit");
-                                        let _ = send_command(&write_proxy, &write_command_sender, BackendCommand::ChildProcessExit {pid:write_id, exit_code:None});
+                                        let _ = send_command(&write_proxy, &write_command_sender, BackendCommand::ChildProcessExit {pid:write_id, exit_code});
                                     });
                                 }
                             );
-                            respond_ok(responder);
                         },
                         Err(e) => {
                             log::error!("PTYCommand spawn_command Error: {}", e);

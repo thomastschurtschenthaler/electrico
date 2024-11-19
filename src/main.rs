@@ -202,18 +202,6 @@ fn main() -> wry::Result<()> {
           },
           Command::BrowserWindowReadFile { browser_window_id, file_path, module } => {
               trace!("BrowserWindowReadFile {} {}", browser_window_id, file_path);
-              for fprot in &frontend.file_protocols {
-                if file_path.starts_with(fprot) {
-                  trace!("file protocol request: {}, {}", fprot, file_path);
-                  let _ = proxy.send_event(ElectricoEvents::ExecuteCommand {command:Command::PostIPC {
-                    browser_window_id:browser_window_id,
-                    request_id:Uuid::new_v4().to_string(),
-                    params: format!("[\"__electrico_protocol\", \"{}\", \"{}\"]", fprot, file_path)
-                  }, responder, data_blob:None});
-                  return;
-                }
-              }
-              
               match frontend.get_client_path_base(&browser_window_id) {
                   Some(client_path_base) => {
                     let file = rsrc_dir.join(file_path.clone());

@@ -1,4 +1,4 @@
-use std::{env, fs::{self, OpenOptions}, io::{Read, Seek, SeekFrom, Write}, path::Path, time::SystemTime};
+use std::{collections::HashMap, env, ffi::OsStr, fs::{self, OpenOptions}, io::{Read, Seek, SeekFrom, Write}, path::Path, time::SystemTime};
 use log::{debug, error, info, trace, warn};
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use reqwest::{header::{ACCESS_CONTROL_ALLOW_ORIGIN, CONTENT_TYPE}, Method, Request, StatusCode, Url};
@@ -6,7 +6,7 @@ use tao::event_loop::EventLoopProxy;
 use tokio::runtime::Runtime;
 use wry::{http::Response, webview_version, RequestAsyncResponder};
 
-use crate::{backend::Backend, common::{respond_404, respond_client_error, respond_ok, respond_status, CONTENT_TYPE_BIN, CONTENT_TYPE_JSON, CONTENT_TYPE_TEXT}, node::{common::send_command, ipc::{ipc_connection, ipc_server}, types::{FSDirent, Process, ProcessEnv, ProcessVersions}}, types::{BackendCommand, ElectricoEvents}};
+use crate::{backend::Backend, common::{respond_404, respond_client_error, respond_ok, respond_status, CONTENT_TYPE_BIN, CONTENT_TYPE_JSON, CONTENT_TYPE_TEXT}, node::{common::send_command, ipc::{ipc_connection, ipc_server}, types::{FSDirent, Process, ProcessVersions}}, types::{BackendCommand, ElectricoEvents}};
 use super::{addons::addons::process_command, process::child_process_spawn, types::{ConsoleLogLevel, FSStat, NodeCommand}};
 
 pub struct AppEnv {
@@ -93,14 +93,23 @@ pub fn process_node_command(tokio_runtime:&Runtime, app_env:&AppEnv,
             if let Ok(p) = std::env::current_exe() {
                 exec_path = p.as_os_str().to_str().unwrap().to_string();
             }
-            let path = env::var("PATH").unwrap();
-            
+            let mut env:HashMap<String, String> = HashMap::new();
+            /*for (k, v) in env::vars() {
+                env.insert(k, v);
+            }*/
+            env.insert("NODE_ENV".to_string(), node_env);
+            env.insert("ELECTRON_IS_DEV".to_string(), electron_is_dev);
+            env.insert("HOME".to_string(), env::var("HOME").unwrap());
+            env.insert("PATH".to_string(), env::var("PATH").unwrap());
+            env.insert("SHELL".to_string(), env::var("SHELL").unwrap());
+
             let process_info = Process::new(platform.to_string(), 
                 ProcessVersions::new(node, chrome, electron), 
-                ProcessEnv::new(node_env, electron_is_dev, home, path),
+                env,
                 app_env.resources_path.clone(),
                 exec_path,
-                app_env.start_args.clone()
+                app_env.start_args.clone(),
+                std::process::id()
             );
             match serde_json::to_string(&process_info) {
                 Ok(json) => {
@@ -211,17 +220,18 @@ pub fn process_node_command(tokio_runtime:&Runtime, app_env:&AppEnv,
             }
             let mut entries:Vec<FSDirent> = Vec::new();
             fn read_dir(path:String, entries:&mut Vec<FSDirent>, recursive:bool) -> Option<std::io::Error> {
-                match fs::read_dir(path) {
+                match fs::read_dir(&path) {
                     Ok(rd) => {
                         for e in rd {
                             if let Ok(e) = e {
-                                let path = e.path().as_os_str().to_str().unwrap().to_string();
+                                let dpath = e.path().as_os_str().to_str().unwrap().to_string();
+                                let name = e.path().file_name().unwrap_or(OsStr::new("")).to_str().unwrap_or("").to_string();
                                 if recursive && e.path().is_dir() {
-                                    if let Some(error) = read_dir(path.clone(), entries, recursive) {
+                                    if let Some(error) = read_dir(dpath, entries, recursive) {
                                         return Some(error);
                                     }
                                 }
-                                entries.push(FSDirent::new(path, e.path().is_dir()));
+                                entries.push(FSDirent::new(path.clone(), name, e.path().is_dir()));
                             }
                         }
                         return None;

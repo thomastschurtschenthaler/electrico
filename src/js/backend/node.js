@@ -33,6 +33,81 @@
         return {"action":"Node", invoke:invoke};
     }
     let decoder = new TextDecoder();
+    function new_process(pid) {
+        let proc = {
+            pid: pid,
+            on: {},
+            stdout_on: {},
+            stderr_on: {},
+            stdin: {
+                write: (data) => {
+                    let {r, e} = $e_node.syncChildProcessStdinWrite({pid: pid}, data);
+                    if (e!=null) {
+                        throw "child_process.stdin.write error: "+e;
+                    }
+                }
+            },
+            stdout: {
+                on: (event, cb) => {
+                    proc.stdout_on[event] = cb;
+                }
+            },
+            stderr: {
+                on: (event, cb) => {
+                    proc.stderr_on[event] = cb;
+                }
+            },
+            on: (event, cb) => {
+                proc.on[event] = cb;
+            },
+            disconnect: () => {
+                let {r, e} = $e_node.syncChildProcessDisconnect({pid: pid});
+                if (e!=null) {
+                    throw "child_process.disconnect error: "+e;
+                }
+            }
+        };
+        window.__electrico.child_process[pid] = proc;
+        return proc;
+    }
+    let child_process = {
+        spawn: function(cmd, args, options) {
+            let {r, e} = $e_node.syncChildProcessSpawn({cmd:cmd, args:args});
+            if (e!=null) {
+                throw "child_process.spawn error: "+e;
+            }
+            let pid = r;
+            let proc = new_process(pid);
+            return proc;
+        },
+        exec: function(cmd, options, cb) {
+            if (cb==null) {
+                cb=options;
+                options=null;
+            }
+            let {r, e} = $e_node.syncChildProcessSpawn({});
+            if (e!=null) {
+                throw "child_process.exec error: "+e;
+            }
+            let pid = r;
+            let proc = new_process(pid);
+            if (cb!=null) {
+                let stdout="";let stderr="";
+                proc.stdout.on('data', (data) => {
+                    stdout+=data.toString();
+                });
+                proc.stderr.on('data', (data) => {
+                    stderr+=data.toString();
+                });
+                proc.on('close', (code) => {
+                    //console.log("child_process.exec on close", code, stdout, stderr);
+                    cb(code!=0?code:null, stdout, stderr);
+                });
+            }
+            proc.stdin.write(cmd+"\nexit\n");
+            return proc;
+        }
+    };
     let node = {
         path: path, 
         fs: {
@@ -59,9 +134,34 @@
                     }
                 });
             },
+            lstat(path, mode, cb) {
+                if (cb==null) {
+                    cb = mode;
+                    mode=null;
+                }
+                $e_node.asyncFSLstat({"path":path}).then((e, r)=>{
+                    if (e!=null) {
+                        cb({"code":"ENOENT", "message": "no such file or directory, lstat '"+path+"'"});
+                    } else {
+                        let resp = JSON.parse(r);
+                        cb(null, {
+                            isDirectory: () => {
+                                return resp.isDirectory
+                            },
+                            isFile: () => {
+                                return !resp.isDirectory
+                            },
+                            birthtime: resp.birthtime!=null?new Date(resp.birthtime.secs_since_epoch*1000):null,
+                            mtime: resp.mtime!=null?new Date(resp.mtime.secs_since_epoch*1000):null
+                        });
+                    }
+                });
+            },
             lstatSync(path) {
                 let {r, e} = $e_node.syncFSLstat({"path":path});
-                if (e!=null) throw {"code":"ENOENT", "message": "no such file or directory, lstat '"+path+"'"};
+                if (e!=null) {
+                    throw {"code":"ENOENT", "message": "no such file or directory, lstat '"+path+"'"};
+                }
                 let resp = JSON.parse(r);
                 return {
                     isDirectory: () => {
@@ -169,11 +269,25 @@
                 if (options==null || !options.withFileTypes) {
                     let names = [];
                     for (let de of dirents) {
-                        names.push(de.name);
+                        names.push(de.path+"/"+de.name);
                     }
+                    console.log("readdirSync names resp", path, names);
                     return names;
                 }
-                return dirents;
+                let entries = dirents.map(de=>{return {
+                    name:de.name,
+                    path:de.path,
+                    isDirectory: () => {
+                        return de.isDirectory;
+                    },
+                    isFile: () => {
+                        return !de.isDirectory;
+                    },
+                    isSymbolicLink: () => {
+                        return false;
+                    }
+                }});
+                return entries;
             },
             open(path, flags, mode, cb) {
                 if (cb==null) {
@@ -330,12 +444,29 @@
             promises: {
                 stat: (path) => {
                     return new Promise((resolve, reject)=>{
-                        resolve(node.fs.lstatSync(path));
+                        node.fs.lstat(path, (e, r)=>{
+                            if (e!=null) {
+                                reject(e);
+                            } else {
+                                resolve(r);
+                            }
+                        });
                     });
                 },
-                readdir: (path) => {
+                access: (path, mode) => {
                     return new Promise((resolve, reject)=>{
-                        resolve(node.fs.readdirSync(path));
+                        node.fs.access(path, mode, (e) => {
+                            if (e!=null) {
+                                reject(e);
+                            } else {
+                                resolve();
+                            }
+                        })
+                    });
+                },
+                readdir: (path, options) => {
+                    return new Promise((resolve, reject)=>{
+                        resolve(node.fs.readdirSync(path, options));
                     });
                 },
                 mkdir: (path, options) => {
@@ -400,50 +531,7 @@
                 }
             }
         },
-        child_process: {
-            spawn: function(cmd, args, options) {
-                let {r, e} = $e_node.syncChildProcessSpawn({cmd:cmd, args:args});
-                if (e!=null) {
-                    throw "child_process.spawn error: "+e;
-                }
-                let pid = r;
-                let proc = {
-                    pid: pid,
-                    on: {},
-                    stdout_on: {},
-                    stderr_on: {},
-                    stdin: {
-                        write: (data) => {
-                            let {r, e} = $e_node.syncChildProcessStdinWrite({pid: pid}, data);
-                            if (e!=null) {
-                                throw "child_process.stdin.write error: "+e;
-                            }
-                        }
-                    },
-                    stdout: {
-                        on: (event, cb) => {
-                            proc.stdout_on[event] = cb;
-                        }
-                    },
-                    stderr: {
-                        on: (event, cb) => {
-                            proc.stderr_on[event] = cb;
-                        }
-                    },
-                    on: (event, cb) => {
-                        proc.on[event] = cb;
-                    },
-                    disconnect: () => {
-                        let {r, e} = $e_node.syncChildProcessDisconnect({pid: pid});
-                        if (e!=null) {
-                            throw "child_process.disconnect error: "+e;
-                        }
-                    }
-                };
-                window.__electrico.child_process[pid] = proc;
-                return proc;
-            }
-        },
+        child_process: child_process,
         os: {
             homedir: () => {
                 if (window.__electrico.homedir==null) {

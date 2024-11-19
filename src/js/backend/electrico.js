@@ -1,6 +1,6 @@
 var __electrico_nonce=null;
 (function() {
-    let wkeys = ['location', 'screen', '__is_windows', 'createWindow', 'setTimeout', 'clearTimeout','clearInterval', 'fetch', '__init_shared', '__init_require', 'btoa', 'atob', 'performance'];
+    let wkeys = ['location', 'screen', '__is_windows', 'createWindow', 'setTimeout', 'setInterval', 'clearTimeout','clearInterval', 'fetch', '__init_shared', '__init_require', 'btoa', 'atob', 'performance'];
     for (let k in window) {
         if (!wkeys.includes(k)) {
             window[k]=()=>{};
@@ -136,7 +136,7 @@ var __electrico_nonce=null;
     function callChannel(timeout, browserWindowID, requestID, channel, ...args) {
         if (channel=="__electrico_protocol") {
             //console.log("callChannel - __electrico_protocol", args);
-            window.window.__electrico.file_protocol[args[0]](requestID, {url:args[1]});
+            window.__electrico.file_protocol[args[0]](requestID, {url:args[1]});
             return {returnValue:""};
         }
 
@@ -210,7 +210,7 @@ var __electrico_nonce=null;
                         try {
                             cb(exit_code);
                         } catch (e) {
-                            console.log("child_process.on_close", e);
+                            console.error("child_process.on_close", e);
                         }
                     }
                     setTimeout(()=>{
@@ -472,14 +472,21 @@ var __electrico_nonce=null;
                 if (msg.portid!=null && _this.neutered_ports[msg.portid]!=null) {
                     _this.neutered_ports[msg.portid].postMessage(msg.data, msg.ports);
                 } else {
-                    let eport = msg.portid!=null?_this.received_ports[msg.portid]:_this;
-                    if (eport==null) {
-                        console.error("ProcessPort.onMessageReceived no received port for portid", msg);
+                    let emit = () => {
+                        let eport = msg.portid!=null?_this.received_ports[msg.portid]:_this;
+                        if (eport==null) {
+                            console.log("ProcessPort.onMessageReceived no port received for portid yet", msg.portid);
+                            setTimeout(emit, 100);
+                            return;
+                        }
+                        delete msg.portid;
+                        if (eport.started) {
+                            eport.emit("message", _this.flatten!=null?_this.flatten(msg):msg);
+                        } else {
+                            console.error("port not started!");
+                        }
                     }
-                    delete msg.portid;
-                    if (eport.started) {
-                        eport.emit("message", _this.flatten!=null?_this.flatten(msg):msg);
-                    }
+                    emit();
                 }
             }
             this.ondata = (data) => {
@@ -489,7 +496,6 @@ var __electrico_nonce=null;
             }
             this.start = (() => {
                 this.started=true;
-                this._OHA="AHO";
             }).bind(this);
         }
     }
@@ -525,14 +531,17 @@ var __electrico_nonce=null;
     let mainIPCServer =  {
         init: function() {
             const {app} = require('electron/main');
-            let Buffer = require('buffer').Buffer;
+
             let { createServer } = require('net');
             server = createServer();
             let err = (e)=>{
                 console.error("mainIPCServer server error", e);
             };
             server.on('error', err);
-            this.hook = app.getPath("temp")+"/electrico_ipc";
+            this.hook = app.getPath("temp")+"/"+window.__uuidv4();
+            if (this.hook.length>100) {
+                this.hook = this.hook.substring(0, 100);
+            }
             let _this=this;
             server.listen(this.hook, () => {
                 server.removeListener('error', err);
@@ -616,7 +625,6 @@ var __electrico_nonce=null;
                 _process = JSON.parse(r);
                 _process.env['VSCODE_DEV']=1;
                 _process.version="v22.9.0";
-                _process.pid=1;
                 for (let k in _process) {
                     target[k] = _process[k];
                 }
