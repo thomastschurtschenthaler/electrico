@@ -417,13 +417,10 @@
                             //console.log("file_protocol call", requestID, request);
                             handler(request, (response) => {
                                 //console.log("file_protocol call handler response", request, response);
-                                let file_path = response.mimeType==null?response.path:null;
-                                let urlcmd = JSON.stringify({"action":"SetIPCResponse", "request_id":requestID, "params": response.data, file_path:file_path});
+                                let urlcmd = JSON.stringify({"action":"SetIPCResponse", "request_id":requestID, "params": response.data, file_path:response.path});
                                 const req = new XMLHttpRequest();
-                                req.open("POST", window.__create_protocol_url("cmd://cmd/Frontend.SetProtocolResponse?"+encodeURIComponent(urlcmd)), true);
-                                let fs = require("node:fs");
-                                let data = fs.readFileSync(response.path);
-                                req.send(data);
+                                req.open("POST", window.__create_protocol_url("cmd://cmd/Frontend.SetProtocolResponse"), true);
+                                req.send(urlcmd);
                             });
                         }
                     }
@@ -552,10 +549,16 @@
                 class UtilityProcessCls extends window.__electrico.ProcessPort {
                     constructor() {
                         super();
+                        this.pending_ports=[];
+                        let queue=[];
                         this.sender = (function(data) {
+                            queue.push(data);
                             let doSend = (function() {
                                 if (this._forked) {
-                                    this.con.write(data);
+                                    for (let d of queue) {
+                                        this.con.write(d);
+                                    }
+                                    queue=[];
                                 } else {
                                     setTimeout(doSend, 200);
                                 }
@@ -569,6 +572,10 @@
                         this.sbuffer = new window.__electrico.SerializationBuffer(this.clientid);
                         this.forked = (function() {
                             this._forked=true;
+                            for (let p of this.pending_ports) {
+                                delete p.pending;
+                            }
+                            delete this.pending_ports;
                             this.emit("spawn");
                         }).bind(this);
                         window.__electrico.mainIPCServer.connect(this);
@@ -576,7 +583,7 @@
                 }
                 uProc = new UtilityProcessCls();
                 uProc.start();
-
+                
                 const { spawn } = require('node:child_process');
                 let ix = modulePath.indexOf("/")+1;
                 if (modulePath.startsWith(window.__electrico.appPath)) {
@@ -612,10 +619,17 @@
                             port2.connected_port=this;
                         }
                         this.postMessage = ((data, ports) => {
-                            this.connected_port.emit("message", {data:data, ports:ports});
+                            if (this.started) {
+                                this.connected_port.emit("message", {data:data, ports:ports});
+                            } else {
+                                console.error("postMessage ChannelPort not started", this.id);
+                            }
                         }).bind(this);
                         this.start = (() => {
                             this.started=true;
+                        }).bind(this);
+                        this.close = (() => {
+                            this.started=false;
                         }).bind(this);
                     }
                 }

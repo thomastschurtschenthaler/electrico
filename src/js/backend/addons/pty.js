@@ -24,6 +24,7 @@
                 onData: (cb) => {
                     pcp.stdout_on = {
                         data: (data) => {
+                            console.log("pty cb out", data.toString());
                             cb({data:data});
                         }
                     }
@@ -36,7 +37,7 @@
                 },
                 resize: (cols, rows) => {
                     // TODO
-                    console.log("ptyProcess.resize", cols, rows);
+                    console.error("ptyProcess.resize", cols, rows);
                 },
                 onExit: (cb) => {
                     pcp.on.close = (exit_code)=> {

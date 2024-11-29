@@ -19,7 +19,7 @@ use log::{debug, error, info, trace, warn};
 use node::node::{process_node_command, AppEnv};
 use reqwest::StatusCode;
 use tao::event_loop::EventLoopBuilder;
-use common::{build_file_map, escape, handle_file_request, respond_404, respond_ok, respond_status, CONTENT_TYPE_BIN, CONTENT_TYPE_HTML, CONTENT_TYPE_JSON, JS_DIR_FRONTEND};
+use common::{build_file_map, escape, handle_file_request, read_file, respond_404, respond_ok, respond_status, CONTENT_TYPE_BIN, CONTENT_TYPE_HTML, CONTENT_TYPE_JSON, JS_DIR_FRONTEND};
 use tempfile::TempDir;
 use types::{Command, ElectricoEvents, ForkParams, Package, Resources};
 use tao::{event::{Event, StartCause, WindowEvent},event_loop::{ControlFlow, EventLoop}};
@@ -42,7 +42,7 @@ fn main() -> wry::Result<()> {
 
   env_logger::init_from_env(env);
   
-  let tokio_runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(30).enable_io().enable_time().build().unwrap();
+  let tokio_runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(50).enable_io().enable_time().build().unwrap();
   
   let mut rsrc_dir:PathBuf;
   let package:Package;
@@ -179,25 +179,29 @@ fn main() -> wry::Result<()> {
           },
           Command::SetIPCResponse {request_id, file_path} => {
             trace!("backend ExecuteCommand call SetIPCResponse {}", request_id);
-            if let Some(params) = data_blob {
-              match ipc_channel.get(&request_id) {
-                Some(sender) => {
-                  if let Some(file_path) = file_path {
-                    let mime_type = mime_guess::from_path(file_path).first_or_octet_stream().to_string();
-                    let _ = sender.send(IPCResponse::new(params, mime_type));
+            match ipc_channel.get(&request_id) {
+              Some(sender) => {
+                if let Some(file_path) = file_path {
+                  let mime_type = mime_guess::from_path(&file_path).first_or_octet_stream().to_string();
+                  if let Some(data) = read_file(&file_path) {
+                    let _ = sender.send(IPCResponse::new(data, mime_type));
                   } else {
-                    let _ = sender.send(IPCResponse::new(params, CONTENT_TYPE_JSON.to_string()));
+                    respond_404(responder);
                   }
-                  ipc_channel.end(&request_id);
-                },
-                None => {
-                  warn!("ipc_channel - backend ExecuteCommand call SetIPCResponse request expired (timeout): {}", request_id);
+                } else {
+                  if let Some(params) = data_blob {
+                    let _ = sender.send(IPCResponse::new(params, CONTENT_TYPE_JSON.to_string()));
+                  } else {
+                    error!("SetIPCResponse - no data blob");
+                    respond_404(responder);
+                  }
                 }
+                ipc_channel.end(&request_id);
+              },
+              None => {
+                warn!("ipc_channel - backend ExecuteCommand call SetIPCResponse request expired (timeout): {}", request_id);
+                respond_ok(responder);
               }
-              respond_ok(responder);
-            } else {
-              error!("SetIPCResponse - no data blob");
-              respond_404(responder);
             }
           },
           Command::BrowserWindowReadFile { browser_window_id, file_path, module } => {

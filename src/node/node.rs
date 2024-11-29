@@ -456,6 +456,10 @@ pub fn process_node_command(tokio_runtime:&Runtime, app_env:&AppEnv,
             backend.child_process_disconnect(pid);
             respond_ok(responder);
         },
+        NodeCommand::ChildProcessKill { pid  } => {
+            backend.child_process_kill(pid);
+            respond_ok(responder);
+        },
         NodeCommand::FSWatch { path, wid, options } => {
             let mut mode = RecursiveMode::NonRecursive;
             if let Some(options) = options {
@@ -465,13 +469,13 @@ pub fn process_node_command(tokio_runtime:&Runtime, app_env:&AppEnv,
                     }
                 }
             }
-            let w_proxy = proxy.clone();
-            let w_command_sender = command_sender.clone();
             let w_wid = wid.clone();
             match RecommendedWatcher::new(
                 move |res| {
                     if let Ok(event) = res {
                         trace!("fswatch receive event {:?}", event);
+                        let w_proxy = proxy.clone();
+                        let w_command_sender = command_sender.clone();
                         let _ = send_command(&w_proxy, &w_command_sender, BackendCommand::FSWatchEvent { wid: w_wid.clone(), event: event });
                     }
                 },

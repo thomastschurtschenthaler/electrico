@@ -1,5 +1,5 @@
-use std::sync::mpsc::Sender;
 use notify::Event;
+use tokio::sync::mpsc::Sender;
 use wry::RequestAsyncResponder;
 use crate::{electron::types::ElectronCommand, node::types::NodeCommand};
 
@@ -44,6 +44,7 @@ pub struct ForkParams {
 pub enum ChildProcess {
   StdinWrite {data: Vec<u8>},
   Disconnect,
+  Kill,
   StdoutEnd,
   StderrEnd
 }

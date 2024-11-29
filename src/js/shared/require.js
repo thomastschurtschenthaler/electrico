@@ -44,14 +44,14 @@
             }
             let script=null; let req={};
             if (cached!="") {
-                let jsfilepath = window.__create_protocol_url("fil://mod/"+((expanded_path.lastIndexOf(".")<expanded_path.lastIndexOf("/"))?expanded_path+".js":expanded_path));
+                let jsfilepath = window.__create_protocol_url(window.__create_file_url("electrico-mod/"+((expanded_path.lastIndexOf(".")<expanded_path.lastIndexOf("/"))?expanded_path+".js":expanded_path)));
                 req = new XMLHttpRequest();
                 req.open("GET", jsfilepath, false);
                 req.send();
             }
             if (cached=="" || req.status==301) {
                 //console.trace("js file not found", expanded_path);
-                let package_path = window.__create_protocol_url("fil://mod/"+expanded_path+"/package.json");
+                let package_path = window.__create_protocol_url(window.__create_file_url("electrico-mod/"+expanded_path+"/package.json"));
                 const preq = new XMLHttpRequest();
                 preq.open("GET", package_path, false);
                 preq.send();
@@ -67,7 +67,7 @@
                 expanded_path = normalize(expanded_path);
                 
                 const req2 = new XMLHttpRequest();
-                let jsfilepath = window.__create_protocol_url("fil://mod/"+expanded_path);
+                let jsfilepath = window.__create_protocol_url(window.__create_file_url("electrico-mod/"+expanded_path));
                 req2.open("GET", jsfilepath, false);
                 req2.send();
                 if (req2.status==404) {
@@ -92,13 +92,10 @@
                 try {
                     eval(script);
                 } catch (e) {
-                    //console.log("require error", expanded_path, script, e);
+                    console.log("require error", expanded_path, script, e);
                     throw e;
                 }
                 if (exports.__electrico_deferred!=null) {
-                    if (mpath.endsWith("base/common/async.js")) {
-                        console.log("base/common/async.js");
-                    }
                     for (let def of exports.__electrico_deferred) {
                         def();
                     }
@@ -190,7 +187,7 @@
             script = script.replaceAll(/([;,\r,\n])export (.*) from [',"](.*)[',"][;,\r,\n]/g, ";$1var __electrico_import=__Import(__require_this, '$2', '$3', true, exports);eval(__electrico_import.toEval);");
             
             script = script.replaceAll(/\export +{ *([^{ ,;,\n,}}]*) *} *;/g, "exports['$1']=$1;");
-            let export_try_deferred = "var $3={}; try {exports['$3']=$3$4;} catch (e) {}; if (exports.__electrico_deferred!=null) exports.__electrico_deferred.push(function(){exports['$3']=$3$4;});";
+            let export_try_deferred = "var $3={}; try {exports['$3']=$3$4;} catch (e) {}; if (exports.__electrico_deferred!=null) exports.__electrico_deferred.push(function(){if (exports['$3']==null || (Object.keys(exports['$3']).length === 0 && exports['$3'].constructor === Object)) exports['$3']=$3$4;});";
 
             script = script.replaceAll(/\export +(var ) *(([^{ ,;,\n}]*))(.*);/g, export_try_deferred);
             script = script.replaceAll(/\export +(let ) *(([^{ ,;,\n}]*))(.*);/g, export_try_deferred);
@@ -208,7 +205,7 @@
                 try {
                     let sourcemaps = JSON.parse(atob(script.substring(smix+sourcemapspattern.length)));
                     if (sourcemaps.sourceRoot!=null && sourcemaps.sourceRoot.startsWith("file://")) {
-                        sourcemaps.sourceRoot = window.__create_protocol_url("fil://mod/"+sourcemaps.sourceRoot.substring(7));
+                        sourcemaps.sourceRoot = window.__create_protocol_url(window.__create_file_url("electrico-mod/"+sourcemaps.sourceRoot.substring(7)));
                         //script = script.substring(0, smix+sourcemapspattern.length)+btoa(JSON.stringify(sourcemaps));
                         script = script.substring(0, smix+sourcemapspattern.length);
                     }

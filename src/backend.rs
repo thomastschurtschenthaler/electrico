@@ -5,6 +5,7 @@ use substring::Substring;
 use log::{debug, error, trace};
 use include_dir::{include_dir, Dir};
 use tao::{dpi::PhysicalSize, event_loop::{EventLoop, EventLoopProxy}, window::{Window, WindowBuilder}};
+use tokio::runtime::Runtime;
 use wry::{http::Request, RequestAsyncResponder, WebView, WebViewBuilder};
 use serde_json::Error;
 use crate::{common::{append_js_scripts, build_file_map, escape, get_message_data, handle_file_request, is_module_request, respond_404, DataQueue}, types::{BackendCommand, ChildProcess, NETConnection, NETServer}};
@@ -15,13 +16,14 @@ pub struct Backend {
     webview:WebView,
     command_sender:Sender<BackendCommand>,
     command_receiver:Receiver<BackendCommand>,
-    child_process:HashMap<String, Sender<ChildProcess>>,
+    child_process:HashMap<String, tokio::sync::mpsc::Sender<ChildProcess>>,
     fs_watcher:HashMap<String, RecommendedWatcher>,
     fs_files:HashMap<i64, File>,
-    net_server:HashMap<String, Sender<NETServer>>,
-    net_connections:HashMap<String, Sender<NETConnection>>,
+    net_server:HashMap<String, tokio::sync::mpsc::Sender<NETServer>>,
+    net_connections:HashMap<String, tokio::sync::mpsc::Sender<NETConnection>>,
     data_queue:DataQueue,
-    addon_state: HashMap<String, Box<dyn Any>>
+    addon_state: HashMap<String, Box<dyn Any>>,
+    tokio_runtime:Runtime
 }
 
 impl Backend {
@@ -79,7 +81,7 @@ impl Backend {
                 respond_404(responder);
             }
         };
-        let tokio_runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(5).enable_io().enable_time().build().unwrap();
+        let tokio_runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(20).enable_io().enable_time().build().unwrap();
         
         let fil_handler = move |request: Request<Vec<u8>>, responder:RequestAsyncResponder| {
             let rpath = request.uri().path().to_string();
@@ -102,7 +104,7 @@ impl Backend {
             target_os = "android"
         ))]
         let builder = WebViewBuilder::new(&window);
-    
+        
         #[cfg(not(any(
             target_os = "windows",
             target_os = "macos",
@@ -138,7 +140,8 @@ impl Backend {
             net_server: HashMap::new(),
             net_connections: HashMap::new(),
             data_queue: DataQueue::new(),
-            addon_state: HashMap::new()
+            addon_state: HashMap::new(),
+            tokio_runtime:tokio::runtime::Builder::new_multi_thread().worker_threads(20).enable_io().enable_time().build().unwrap()
         }
     }
     pub fn addon_state_insert<T: 'static>(&mut self, cid:&String, c:T) {
@@ -195,13 +198,17 @@ impl Backend {
             if let Some(sender) = self.child_process.get(&pid) {
               trace!("ChildProcessData stdin {} {:?}", pid, data);
               if let Some(data) = data {
-                let _ = sender.send(ChildProcess::StdinWrite {data});
+                let sender = sender.clone();
+                self.tokio_runtime.spawn(async move {
+                    let _ = sender.send(ChildProcess::StdinWrite {data}).await;
+                });
               }
             }
         } else {
             trace!("child_process_callback {} {}", stream, pid);
             if let Some(data) = data {
-                self.data_queue.add(&pid, data);
+                let data_key = pid.clone()+stream.as_str();
+                self.data_queue.add(&data_key, data);
             }
             let retry_sender = self.command_sender.clone();
             let _ = self.webview.evaluate_script_with_callback(&format!("window.__electrico.call(()=>{{window.__electrico.child_process.callback.on_{}('{}');}});", stream, pid), move |r| {
@@ -220,12 +227,17 @@ impl Backend {
             call_script=format!("window.__electrico.child_process.callback.on_close('{}');", pid);
         }
         let retry_sender = self.command_sender.clone();
-        let _ = self.webview.evaluate_script_with_callback(&format!("window.__electrico.call(()=>{{{}}});", call_script.as_str()), move |r| {
-            if r.len()==0 {
-                trace!("child_process_exit not OK - resending");
-                let _ = retry_sender.send(BackendCommand::ChildProcessExit { pid: pid.clone(), exit_code: exit_code.clone() });
-            }
-        });
+        if self.data_queue.size(&(pid.clone()+"stdout")) == 0 && self.data_queue.size(&(pid.clone()+"stderr")) == 0 {
+            let _ = self.webview.evaluate_script_with_callback(&format!("window.__electrico.call(()=>{{{}}});", call_script.as_str()), move |r| {
+                if r.len()==0 {
+                    trace!("child_process_exit not OK - resending");
+                    let _ = retry_sender.send(BackendCommand::ChildProcessExit { pid: pid.clone(), exit_code: exit_code.clone() });
+                }
+            });
+        } else {
+            trace!("still stdout/stderr data on queue - call exit later {}", pid);
+            let _ = retry_sender.send(BackendCommand::ChildProcessExit { pid: pid.clone(), exit_code: exit_code.clone() });
+        }
     }
     pub fn fs_watch_callback(&mut self, wid:String, event:Event) {
         let call_script = format!("window.__electrico.fs_watcher.on_event('{}', '{:?}', '{}')",
@@ -243,14 +255,26 @@ impl Backend {
     pub fn command_sender(&mut self) -> Sender<BackendCommand> {
         self.command_sender.clone()
     }
-    pub fn child_process_start(&mut self, pid:&String, sender:Sender<ChildProcess>) {
+    pub fn child_process_start(&mut self, pid:&String, sender:tokio::sync::mpsc::Sender<ChildProcess>) {
         trace!("child_process_start {}", pid);
         self.child_process.insert(pid.clone(), sender);
     }
     pub fn child_process_disconnect(&mut self, pid:String) {
         trace!("child_process_disconnect {}", pid);
         if let Some(sender) = self.child_process.get(&pid) {
-            let _ = sender.send(ChildProcess::Disconnect);
+            let sender = sender.clone();
+            self.tokio_runtime.spawn(async move {
+                let _ = sender.send(ChildProcess::Disconnect).await;
+            });
+        }
+    }
+    pub fn child_process_kill(&mut self, pid:String) {
+        trace!("child_process_kill {}", pid);
+        if let Some(sender) = self.child_process.get(&pid) {
+            let sender = sender.clone();
+            self.tokio_runtime.spawn(async move {
+                let _ = sender.send(ChildProcess::Kill).await;
+            });
         }
     }
     pub fn fs_open(&mut self, fd:i64, file:File) {
@@ -277,7 +301,7 @@ impl Backend {
             self.fs_watcher.remove(&wid);
         }
     }
-    pub fn net_server_conn_start(&mut self, hook:String, id:String, sender:Sender<NETConnection>) {
+    pub fn net_server_conn_start(&mut self, hook:String, id:String, sender:tokio::sync::mpsc::Sender<NETConnection>) {
         let call_script=format!("window.__electrico.net_server.callback.on_start('{}', '{}');", hook, id);
         self.net_connections.insert(id.clone(), sender.clone());
         let retry_sender = self.command_sender.clone();
@@ -299,7 +323,7 @@ impl Backend {
             let _ = sender.send(NETConnection::EndConnection);
         }
     }
-    pub fn net_client_conn_start(&mut self, id:String, sender:Sender<NETConnection>) {
+    pub fn net_client_conn_start(&mut self, id:String, sender:tokio::sync::mpsc::Sender<NETConnection>) {
         self.net_connections.insert(id.clone(), sender.clone());
     }
     pub fn net_connection_data(&mut self, id:String, data:Option<Vec<u8>>) {
@@ -322,23 +346,35 @@ impl Backend {
         }
         let call_script=format!("window.__electrico.net_server.callback.on_end('{}');", id);
         let retry_sender = self.command_sender.clone();
-        let _ = self.webview.evaluate_script_with_callback(&format!("window.__electrico.call(()=>{{{}}});", call_script.as_str()), move |r| {
-            if r.len()==0 {
-                trace!("net_connection_end not OK - resending");
-                let _ = retry_sender.send(BackendCommand::NETConnectionEnd { id:id.clone()});
-            }
-        });
+        
+        if self.data_queue.size(&id) == 0 {
+            let _ = self.webview.evaluate_script_with_callback(&format!("window.__electrico.call(()=>{{{}}});", call_script.as_str()), move |r| {
+                if r.len()==0 {
+                    trace!("net_connection_end not OK - resending");
+                    let _ = retry_sender.send(BackendCommand::NETConnectionEnd { id:id.clone()});
+                }
+            });
+        } else {
+            debug!("still connection data on queue - call end later");
+            let _ = retry_sender.send(BackendCommand::NETConnectionEnd { id:id.clone()});
+        }
     }
     pub fn net_write_connection(&mut self, id:String, data:Vec<u8>) {
         if let Some(sender) = self.net_connections.get(&id) {
-            let _ = sender.send(NETConnection::Write { data });
+            let sender = sender.clone();
+            self.tokio_runtime.spawn(async move {
+                let _ = sender.send(NETConnection::Write { data }).await;
+            });
         } else {
             error!("net_write_connection no sender for id {}", id);
         }
     }
     pub fn net_set_timeout(&mut self, id:String, timeout:u128) {
         if let Some(sender) = self.net_connections.get(&id) {
-            let _ = sender.send(NETConnection::SetTimeout { timeout:Some(timeout) });
+            let sender = sender.clone();
+            self.tokio_runtime.spawn(async move {
+                let _ = sender.send(NETConnection::SetTimeout { timeout:Some(timeout) }).await;
+            });
         } else {
             error!("net_write_connection no sender for id {}", id);
         }

@@ -96,6 +96,7 @@ pub enum NodeCommand {
   ChildProcessSpawn {cmd: Option<String>, args:Option<Vec<String>>},
   ChildProcessStdinWrite {pid: String},
   ChildProcessDisconnect {pid: String},
+  ChildProcessKill {pid: String},
   GetDataBlob {id: String},
   Addon {data: String}
 }

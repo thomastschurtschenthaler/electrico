@@ -67,7 +67,7 @@ pub fn handle_file_request(tokio_runtime:&Runtime, module:bool, path:String, ful
                         let mut buffer = Vec::new();
                         match f.read_to_end(&mut buffer) {
                             Ok(_r) => {
-                               respond_status(
+                                respond_status(
                                     StatusCode::OK, 
                                     mime_guess::from_path(full_path).first_or_octet_stream().to_string(), 
                                     buffer, responder);
@@ -90,6 +90,27 @@ pub fn handle_file_request(tokio_runtime:&Runtime, module:bool, path:String, ful
             }
         }
     );
+}
+
+pub fn read_file(path:&String) -> Option<Vec<u8>> {
+    match File::open(path.clone()) {
+        Ok (mut f) => {
+            let mut buffer = Vec::new();
+            match f.read_to_end(&mut buffer) {
+                Ok(_r) => {
+                   return Some(buffer);
+                },
+                Err(e) => {
+                    error!("file read error {} {}", path, e);
+                    return None;
+                }
+            }
+        },
+        Err (_e) => {
+            error!("file not found {}", path);
+            return None;
+        }
+    }
 }
 
 pub fn get_message_data(request: &Request<Vec<u8>>) -> Option<(String, Option<Vec<u8>>)> {
@@ -164,7 +185,7 @@ pub fn check_and_create_dir(dir:&Path) {
 }
 pub fn is_module_request(host:Option<&str>) -> bool {
     if let Some(host) = host {
-        if host=="mod" {
+        if host=="electrico-mod" {
             return true;
         }
     }
@@ -203,5 +224,11 @@ impl DataQueue {
             return ret;
         }
         None
+    }
+    pub fn size(&mut self, k:&String) -> usize {
+        if let Some(q) = self.data_blobs.get_mut(k) {
+           return q.size();
+        }
+        return 0;
     }
 }

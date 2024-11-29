@@ -188,16 +188,16 @@ var __electrico_nonce=null;
             callback: {
                 on_stdout: (pid) => {
                     let Buffer = require('buffer').Buffer;
-                    let {r, e} = $e_node.syncGetDataBlobBin({"id":pid});
+                    let {r, e} = $e_node.syncGetDataBlobBin({"id":pid+"stdout"});
                     let bdata = Buffer.from(r);
                     let cb = window.__electrico.child_process[pid].stdout_on['data'];
                     if (cb!=null) {
                         cb(bdata);
                     }
                 },
-                on_stderr: (pid, data) => {
+                on_stderr: (pid) => {
                     let Buffer = require('buffer').Buffer;
-                    let {r, e} = $e_node.syncGetDataBlobBin({"id":pid});
+                    let {r, e} = $e_node.syncGetDataBlobBin({"id":pid+"stderr"});
                     let bdata = Buffer.from(r);
                     let cb = window.__electrico.child_process[pid].stderr_on['data'];
                     if (cb!=null) {
@@ -372,7 +372,6 @@ var __electrico_nonce=null;
                         let p2 = pos+this.LENGTH_BYTES;
                         if (mdata.length>=p2) {
                             this.actmsg = {l_msgjson:Number(mdata.subarray(pos, pos+this.LENGTH_BYTES).readBigInt64LE())};
-                            //this.actmsg = {l_msgjson:mdata.subarray(pos, pos+this.LENGTH_BYTES).toString().trim()*1};
                             pos = p2;
                         } else {
                             break;
@@ -381,7 +380,12 @@ var __electrico_nonce=null;
                     if (this.actmsg.msgjson==null) {
                         let p2 = pos+this.actmsg.l_msgjson;
                         if (mdata.length>=p2) {
-                            this.actmsg.msgjson=JSON.parse(mdata.subarray(pos, p2).toString());
+                            try {
+                                this.actmsg.msgjson=JSON.parse(mdata.subarray(pos, p2).toString());
+                            } catch (e) {
+                                console.error("SerializationBuffer.msgjson error parsing JSON", e);
+                                throw e;
+                            }
                             pos = p2;
                         } else {
                             break;
@@ -443,12 +447,24 @@ var __electrico_nonce=null;
             this.neutered_ports = {};
             this.received_ports = {};
             let _this=this;
-            this.postMessage = (data, ports, portid) => {
+            let __postMessage = (data, ports, portid, retry) => {
                 ports = ports || [];
+                if (ports.filter(p=>{return p.connected_port!=null && p.connected_port.pending}).length>0) {
+                    setTimeout(()=>{__postMessage(data, ports, portid, true)}, 50);
+                    return;
+                }
+                if (retry) {
+                    setTimeout(()=>{__postMessage(data, ports, portid)}, 100);
+                    return;
+                }
                 ports = ports.map((p) => {
                     if (p.neutered) {
                         console.error("port already neutered", p);
                         return null;
+                    }
+                    if (_this.pending_ports!=null) {
+                        _this.pending_ports.push(p);
+                        p.pending=true;
                     }
                     _this.neutered_ports[p.id] = p;
                     p.neutered=true;
@@ -462,6 +478,9 @@ var __electrico_nonce=null;
                     _this.sender(data);
                 });
             };
+            this.postMessage = (data, ports, portid) => {
+                __postMessage(data, ports, portid);
+            }
             this.__postMessage=this.postMessage;
             this.onMessageReceived = (msg) => {
                 msg.ports = msg.ports.map((p) => {
@@ -496,6 +515,9 @@ var __electrico_nonce=null;
             }
             this.start = (() => {
                 this.started=true;
+            }).bind(this);
+            this.close = (() => {
+                this.started=false;
             }).bind(this);
         }
     }
@@ -539,6 +561,7 @@ var __electrico_nonce=null;
             };
             server.on('error', err);
             this.hook = app.getPath("temp")+"/"+window.__uuidv4();
+            console.log("mainIPCServer hook", this.hook);
             if (this.hook.length>100) {
                 this.hook = this.hook.substring(0, 100);
             }
@@ -594,12 +617,26 @@ var __electrico_nonce=null;
                 return {
                     write: (d) => {
                         console.log(d);
-                    }
+                    },
+                    fd:0
+                }
+            }
+            if (prop=="stderr") {
+                return {
+                    write: (d) => {
+                        console.error(d);
+                    },
+                    fd:2
                 }
             }
             if (prop=="cwd") {
                 return () => {
                     return window.__electrico.appPath;
+                }
+            }
+            if (prop=="exit") {
+                return () => {
+                    console.log("process.exit called");
                 }
             }
             if (prop=="electronBinding") {
@@ -625,6 +662,7 @@ var __electrico_nonce=null;
                 _process = JSON.parse(r);
                 _process.env['VSCODE_DEV']=1;
                 _process.version="v22.9.0";
+                _process.execArgv=[];
                 for (let k in _process) {
                     target[k] = _process[k];
                 }

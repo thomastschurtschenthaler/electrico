@@ -20,6 +20,12 @@
         JSON.stringify = (obj, r) => {
             return _stringify(obj, r!=null?r:getCircularReplacer());
         };
+        window.__create_file_url= (path) => {
+          if (window.location.protocol=="http:" || window.location.protocol=="https:") {
+            return "electrico-file://"+path;
+          }
+          return window.location.protocol+"//"+path;
+      }
         window.__create_protocol_url = (url) => {
             if (window.__is_windows) {
                 let ix = url.indexOf(":");

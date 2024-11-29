@@ -61,10 +61,15 @@
                 proc.on[event] = cb;
             },
             disconnect: () => {
+                console.error("process.disconnect", pid);
                 let {r, e} = $e_node.syncChildProcessDisconnect({pid: pid});
                 if (e!=null) {
                     throw "child_process.disconnect error: "+e;
                 }
+            },
+            kill: (signal) => {
+                console.error("process.kill", pid);
+                let {r, e} = $e_node.syncChildProcessKill({pid: pid});
             }
         };
         window.__electrico.child_process[pid] = proc;
@@ -100,7 +105,6 @@
                     stderr+=data.toString();
                 });
                 proc.on('close', (code) => {
-                    //console.log("child_process.exec on close", code, stdout, stderr);
                     cb(code!=0?code:null, stdout, stderr);
                 });
             }
@@ -271,7 +275,6 @@
                     for (let de of dirents) {
                         names.push(de.path+"/"+de.name);
                     }
-                    console.log("readdirSync names resp", path, names);
                     return names;
                 }
                 let entries = dirents.map(de=>{return {
@@ -528,6 +531,11 @@
                     end: () => {
                         req.send(JSON.stringify(wrapInvoke({"command":"HTTPRequest", options:options})));
                     }
+                }
+            },
+            Agent: class {
+                constructor(opts) {
+                    console.log("http.Agent construct", opts);
                 }
             }
         },
@@ -812,6 +820,18 @@
                 return inflate; 
             }
         },
+        tls: {
+            createSecureContext: (options) => {
+                console.log("tls.createSecureContext", options);
+                return {}
+            }
+        },
+        tty: {
+            isatty: (fd) => {
+                console.error("tty.isatty", fd);
+                return true;
+            }
+        },
         assert: {
 
         },
@@ -864,4 +884,8 @@
     window.__electrico.libs.stream = node.stream;
     window.__electrico.libs["node:readline"] =node.readline;
     window.__electrico.libs.readline = node.readline;
+    window.__electrico.libs["node:tls"] =node.tls;
+    window.__electrico.libs.tls = node.tls;
+    window.__electrico.libs["node:tty"] =node.tty;
+    window.__electrico.libs.tty = node.tty;
 })();

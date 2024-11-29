@@ -4,14 +4,64 @@
         let _XMLHttpRequest = XMLHttpRequest;
         var window=document.window;
         if (window.requestIdleCallback==null) {
+            let cbs = {}; let cbnr=0;
             window.requestIdleCallback = (cb, op) => {
-                setTimeout(cb, 0);
+                let to = (op!=null && op.timeout!=null)?op.timeout:0;
+                cbnr++;
+                cbs[cbnr] = true;
+                function timout(nr, t) {
+                    const end = Date.now() + 15; // one frame at 64fps
+                    const deadline = {
+                        didTimeout: true,
+                        timeRemaining() {
+                            return Math.max(0, end - Date.now());
+                        }
+                    };
+                    setTimeout(()=>{
+                        if (cbs[nr]) {
+                            delete cbs[nr];
+                            cb(Object.freeze(deadline));
+                        }
+                    }, t);
+                }
+                timout(cbnr, to)
+                return cbnr;
+            }
+            window.cancelIdleCallback = (tid) => {
+                delete cbs[tid];
             }
         }
+        function create_ipc_url(path) {
+            //return window.location.protocol+"//electrico-ipc/"+path;
+            if (window.location.protocol=="http:" || window.location.protocol=="https:") {
+                return "electrico-file://file/electrico-ipc/"+path;
+            }
+            return window.location.protocol+"//"+window.location.host+"/electrico-ipc/"+path;
+        }
+        /*window.URL = class extends window.URL {
+            constructor(uri, baseUrl) {
+                let url = baseUrl!=null?baseUrl+uri:uri;
+                let ix = url.indexOf("://");
+                if (baseUrl!=null && ix>=0 && window.location.href.startsWith("fil://file/"+url.substring(0, ix+3))) {
+                    url = "fil://file/"+url;
+                }
+                super(url);
+            }
+        };
+        let _setAttribute=HTMLScriptElement.prototype.setAttribute;
+        HTMLScriptElement.prototype.setAttribute=function(a, v){
+            if (a=="src") {
+                let ix = v.indexOf("://");
+                if (ix>=0 && window.location.href.startsWith("fil://file/"+v.substring(0, ix+3))) {
+                    v = "fil://file/"+v;
+                }
+            }
+            _setAttribute.bind(this)(a, v);
+        };*/
         __init_shared(window);
         window.alert = (msg) => {
             const req = new XMLHttpRequest();
-            req.open("POST", window.__create_protocol_url("ipc://ipc/send"), false);
+            req.open("POST", window.__create_protocol_url(create_ipc_url("send")), false);
             req.send(JSON.stringify({"action": "Alert", "message": msg}));
         }
         function sendIPC(request_id, nonce, async, ...args) {
@@ -24,7 +74,7 @@
                 args[1]={_electrico_buffer_id:request_id};
             }
             let action = JSON.stringify({"action":"PostIPC", "request_id":request_id, "nonce": nonce, "params":JSON.stringify(args)});
-            req.open("POST", window.__create_protocol_url("ipc://ipc/ipc."+channel+(data_blob!=null?("?"+encodeURIComponent(action)):"")), async);
+            req.open("POST", window.__create_protocol_url(create_ipc_url("ipc."+channel+(data_blob!=null?("?"+encodeURIComponent(action)):""))), async);
             req.send(data_blob!=null?data_blob:action);
             return req;
        }
@@ -36,7 +86,7 @@
                     if (_processInfo==null) {
                         if (nonce!=null) {
                             const req = new _XMLHttpRequest();
-                            req.open("POST", window.__create_protocol_url("ipc://ipc/send"), false);
+                            req.open("POST", window.__create_protocol_url(create_ipc_url("send")), false);
                             req.send(JSON.stringify({"action":"GetProcessInfo", "nonce":nonce}));
                             _processInfo = JSON.parse(req.responseText);
                         } else {
@@ -194,7 +244,7 @@
                         }
                         if (args.data._electrico_buffer_id!=null) {
                             const req = new XMLHttpRequest();
-                            req.open("POST", window.__create_protocol_url("ipc://ipc/getdatablob"), true);
+                            req.open("POST", window.__create_protocol_url(create_ipc_url("getdatablob")), true);
                             req.responseType = "arraybuffer";
                             req.send(JSON.stringify({"action":"GetDataBlob", "id":args.data._electrico_buffer_id}));
                             req.onreadystatechange = function() {
@@ -281,8 +331,14 @@
     var {Buffer} = require("buffer");
     window.Buffer=Buffer;
     window.addEventListener("DOMContentLoaded", ()=>{
+        let url = null;
+        if (window.location.protocol=="http:" || window.location.protocol=="https:") {
+            url = "electrico-file://file/electrico-ipc/send";
+        } else {
+            url = window.location.protocol+"//"+window.location.host+"/electrico-ipc/send"
+        }
         const req = new XMLHttpRequest();
-        req.open("POST", window.__create_protocol_url("ipc://ipc/send"), true);
+        req.open("POST", window.__create_protocol_url(url), true);
         req.send(JSON.stringify({"action": "DOMContentLoaded", "title": document.title}));
     })
 })();

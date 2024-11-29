@@ -37,6 +37,9 @@
                 this.error = (function(message) {
                     this.log("Error", message);
                 }).bind(this);
+                this.clearFormatters=(function() {
+                    
+                }).bind(this);
             }
         }
     }
