@@ -251,6 +251,7 @@
                                 if (this.readyState == 4) {
                                     if (req.status == 200) {
                                         args.data = Buffer.from(req.response);
+                                        console.log("channelMessage", args, args.data.toString());
                                         doCall();
                                     }
                                 }

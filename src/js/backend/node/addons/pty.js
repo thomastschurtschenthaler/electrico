@@ -24,13 +24,12 @@
                 onData: (cb) => {
                     pcp.stdout_on = {
                         data: (data) => {
-                            console.log("pty cb out", data.toString());
                             cb({data:data});
                         }
                     }
                 },
                 write: (data) => {
-                    let {r, e} = $e_node.syncChildProcessStdinWrite({pid: id}, data);
+                    let {r, e} = $e_node.syncApi_Childprocess_StdinWrite({pid: id}, data);
                     if (e!=null) {
                         throw "ptyProcess.write error: "+e;
                     }

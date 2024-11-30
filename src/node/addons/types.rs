@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 #[derive(serde::Serialize, serde::Deserialize)]
-#[serde(tag = "addon")]
+#[serde(tag = "api")]
 pub enum AddonCommand {
     SQLite {command: SQLiteCommand},
     SPDLog {command: SPDLogCommand},

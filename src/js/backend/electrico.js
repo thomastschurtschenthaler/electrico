@@ -41,7 +41,7 @@ var __electrico_nonce=null;
                     if (command_parts.length>2) {
                         params = {
                             "data": JSON.stringify({
-                                "addon": command_parts[1],
+                                "api": command_parts[1],
                                 "command": {
                                     "action":command_parts[2],
                                     ...params
@@ -672,8 +672,6 @@ var __electrico_nonce=null;
     });
     window.process=process;
 })();
-//setTimeout(()=>{
-    require("./node.js");
-    require("./addons/addons.js");
-    require("./electron.js");
-//}, 500);
+
+require("./node/node.js");
+require("./electron/electron.js");

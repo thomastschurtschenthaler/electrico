@@ -453,60 +453,6 @@
         BrowserWindow: BrowserWindow,
         Menu: Menu,
         MenuItem: MenuItem,
-        dialog: {
-            showOpenDialogSync: (win, options) => {
-                if (options==null) {
-                    options=win;
-                    win=null;
-                }
-                let {r, e} = $e_electron.syncShowOpenDialogSync({options:options});
-                return JSON.parse(r);
-            },
-            showOpenDialog: (win, options) => {
-                if (options==null) {
-                    options=win;
-                    win=null;
-                }
-                return new Promise(resolve => {
-                    $e_electron.asyncShowOpenDialog({"window_id": win!=null?win._e_id:null, options:options}).then((e, r)=>{
-                        if (e!=null) {
-                            let res = JSON.parse(r);
-                            resolve({"canceled": res==null, "filePaths":res});
-                        } else throw "showOpenDialog failed: "+e;
-                    });
-                });
-            },
-            showSaveDialogSync: (win, options) => {
-                if (options==null) {
-                    options=win;
-                    win=null;
-                }
-                let {r, e} = $e_electron.syncShowSaveDialogSync({options:options});
-                JSON.parse(r);
-            },
-            showSaveDialog: (win, options) => {
-                if (options==null) {
-                    options=win;
-                    win=null;
-                }
-                return new Promise(resolve => {
-                    $e_electron.asyncShowSaveDialog({"window_id": win!=null?win._e_id:null, options:options}).then((e, r)=>{
-                        if (e!=null) {
-                            let res = JSON.parse(r);
-                            resolve({"canceled": res==null, "filePaths":res});
-                        } else throw "showOpenDialog failed: "+e;
-                    });
-                });
-            },
-            showMessageBoxSync: (win, options) => {
-                if (options==null) {
-                    options=win;
-                    win=null;
-                }
-                let {r, e} = $e_electron.syncShowMessageBoxSync({options:options});
-                JSON.parse(r);
-            }
-        },
         shell: {
             openExternal: (url, options) => {
                 $e_electron.asyncShellOpenExternal({url:url});
@@ -686,4 +632,6 @@
 
     let {r, e} = $e_electron.syncGetAppPath();
     window.__electrico.appPath = r;
+
+    require("./apis/apis.js");
 })();

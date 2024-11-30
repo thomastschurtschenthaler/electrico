@@ -7,7 +7,7 @@ use std::{collections::HashMap, fs, path::PathBuf};
 use tao::{dpi::{LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize}, event_loop::{EventLoopProxy, EventLoopWindowTarget}, window::{Icon, Window, WindowBuilder, WindowId}};
 use serde_json::Error;
 use wry::{http::Request, RequestAsyncResponder, WebView, WebViewBuilder};
-use crate::{common::{append_js_scripts, escape, get_message_data, is_module_request, respond_404, respond_status, DataQueue, CONTENT_TYPE_TEXT, JS_DIR_FRONTEND}, electron::types::{BrowserWindowCreateParam, Rectangle, ShowMessageBoxOptions}, types::{Command, ElectricoEvents, FrontendCommand}};
+use crate::{common::{append_js_scripts, escape, get_message_data, is_module_request, respond_404, respond_status, DataQueue, CONTENT_TYPE_TEXT, JS_DIR_FRONTEND}, electron::types::{BrowserWindowCreateParam, Rectangle}, types::{Command, ElectricoEvents, FrontendCommand}};
 
 pub struct FrontendWindow {
     window:Window,
@@ -85,7 +85,7 @@ impl Frontend {
                                 let _ = proxy.send_event(ElectricoEvents::ExecuteCommand{command:Command::DOMContentLoaded {browser_window_id:browser_window_id.clone(), title}, responder, data_blob:None});
                             },
                             FrontendCommand::Alert {message } => {
-                                let _ = proxy.send_event(ElectricoEvents::ExecuteCommand{command:Command::Electron { invoke: crate::electron::types::ElectronCommand::ShowMessageBoxSync { options: ShowMessageBoxOptions::new(message) } }, responder, data_blob:None});
+                                let _ = proxy.send_event(ElectricoEvents::ExecuteCommand{command:Command::Electron { invoke: crate::electron::types::ElectronCommand::Api { data: format!("{{\"api\":\"Dialog\", \"command\":{{\"action\":\"ShowMessageBoxSync\", \"options\":{{\"message\":\"{}\"}}}}}}", escape(&message)) } }, responder, data_blob:None});
                             },
                             FrontendCommand::GetDataBlob { id } => {
                                 let _ = proxy.send_event(ElectricoEvents::ExecuteCommand{command:Command::FrontendGetDataBlob { id }, responder, data_blob:None});

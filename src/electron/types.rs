@@ -68,41 +68,6 @@ pub struct AppMenu {
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
-pub struct FileFilter {
-  pub name: String,
-  pub extensions: Vec<String>,
-}
-
-
-#[derive(serde::Serialize, serde::Deserialize)]
-pub struct FileDialogOptions {
-  pub title: Option<String>,
-  #[serde(rename = "defaultPath")]
-  pub default_path: Option<String>,
-  #[serde(rename = "buttonLabel")]
-  pub button_label: Option<String>,
-  pub filters:Option<Vec<FileFilter>>,
-  pub properties: Option<Vec<String>>,
-  pub message: Option<String>,
-  
-}
-
-#[derive(serde::Serialize, serde::Deserialize)]
-pub struct ShowMessageBoxOptions {
-  pub message: String,
-  #[serde(rename = "type")]
-  pub msg_type: Option<String>,
-  #[serde(rename = "buttonLabel")]
-  pub title: Option<String>,
-  pub detail: Option<String>,
-}
-impl ShowMessageBoxOptions {
-  pub fn new(message: String) -> ShowMessageBoxOptions {
-    ShowMessageBoxOptions {message, msg_type:None, title:None, detail:None }
-  }
-}
-
-#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Rectangle {
   pub x: i32,
   pub y: i32,
@@ -164,13 +129,9 @@ pub enum ElectronCommand {
     GetAppPath {path: Option<String>},
     GetAppVersion,
     SetApplicationMenu {menu:Option<Vec<AppMenu>>},
-    ShowOpenDialogSync {options:FileDialogOptions},
-    ShowOpenDialog {window_id:Option<String>, options:FileDialogOptions},
-    ShowSaveDialogSync {options:FileDialogOptions},
-    ShowSaveDialog {window_id:Option<String>, options:FileDialogOptions},
-    ShowMessageBoxSync {options:ShowMessageBoxOptions},
     GetPrimaryDisplay,
     ShellOpenExternal {url:String},
     PrintToPDF {id: String},
-    RegisterFileProtocol {schema: String}
+    RegisterFileProtocol {schema: String},
+    Api {data: String}
 }

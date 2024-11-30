@@ -187,6 +187,7 @@ fn main() -> wry::Result<()> {
                     let _ = sender.send(IPCResponse::new(data, mime_type));
                   } else {
                     respond_404(responder);
+                    return;
                   }
                 } else {
                   if let Some(params) = data_blob {
@@ -194,9 +195,11 @@ fn main() -> wry::Result<()> {
                   } else {
                     error!("SetIPCResponse - no data blob");
                     respond_404(responder);
+                    return;
                   }
                 }
                 ipc_channel.end(&request_id);
+                respond_ok(responder);
               },
               None => {
                 warn!("ipc_channel - backend ExecuteCommand call SetIPCResponse request expired (timeout): {}", request_id);

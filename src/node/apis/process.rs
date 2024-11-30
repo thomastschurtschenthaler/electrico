@@ -1,22 +1,20 @@
 use std::{io::{BufRead, BufReader}, process::{Command, Stdio}, time::Duration};
-
-use log::{debug, error, trace};
+use log::{error, debug, trace};
 use reqwest::StatusCode;
 use tao::event_loop::EventLoopProxy;
 use tokio::{runtime::Runtime, sync::mpsc::{self, Receiver, Sender}, time::timeout};
+use std::io::Write;
 use wry::RequestAsyncResponder;
-use std::io::{Read, Write};
-
 use crate::{backend::Backend, common::{respond_client_error, respond_status, CONTENT_TYPE_TEXT}, node::common::send_command, types::{BackendCommand, ChildProcess, ElectricoEvents}};
 
 pub fn child_process_spawn(
-        cmd_in:Option<String>, 
-        args:Option<Vec<String>>,
-        backend:&mut Backend,
-        tokio_runtime:&Runtime,
-        proxy: EventLoopProxy<ElectricoEvents>, 
-        command_sender: std::sync::mpsc::Sender<BackendCommand>,
-        responder:RequestAsyncResponder) {
+    cmd_in:Option<String>, 
+    args:Option<Vec<String>>,
+    backend:&mut Backend,
+    tokio_runtime:&Runtime,
+    proxy: EventLoopProxy<ElectricoEvents>, 
+    command_sender: std::sync::mpsc::Sender<BackendCommand>,
+    responder:RequestAsyncResponder) {
     let mut pargs:Vec<String> = Vec::new();
     if let Some(args) = args {
         pargs = args;
@@ -43,8 +41,8 @@ pub fn child_process_spawn(
             respond_status(StatusCode::OK, CONTENT_TYPE_TEXT.to_string(), child.id().to_string().into_bytes(), responder); 
             tokio_runtime.spawn(
                 async move {
-                    let mut stdout;
-                    let mut stderr;
+                    let stdout;
+                    let stderr;
                     let mut stdin;
                     match child.stdout.take() {
                         Some(chstdout) => {
