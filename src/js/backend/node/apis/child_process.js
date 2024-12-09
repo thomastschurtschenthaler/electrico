@@ -1,43 +1,34 @@
 (function() {
+    const EventEmitter = require('eventemitter3');
     function new_process(pid) {
-        let proc = {
-            pid: pid,
-            on: {},
-            stdout_on: {},
-            stderr_on: {},
-            stdin: {
-                write: (data) => {
-                    let {r, e} = $e_node.syncApi_Childprocess_StdinWrite({pid: pid}, data);
-                    if (e!=null) {
-                        throw "child_process.stdin.write error: "+e;
+        class ProcCls extends EventEmitter {
+            constructor(pid) {
+                super();
+                this.pid = pid;
+                this.stdin = {
+                    write: (data) => {
+                        let {r, e} = $e_node.syncApi_Childprocess_StdinWrite({pid: pid}, data);
+                        if (e!=null) {
+                            throw "child_process.stdin.write error: "+e;
+                        }
                     }
+                };
+                this.stdout = new EventEmitter();
+                this.stderr = new EventEmitter();
+                this.disconnect = () => {
+                    console.log("process.disconnect", pid);
+                    let {r, e} = $e_node.syncApi_Childprocess_Disconnect({pid: pid});
+                    if (e!=null) {
+                        throw "child_process.disconnect error: "+e;
+                    }
+                },
+                this.kill = (signal) => {
+                    console.log("process.kill", pid);
+                    let {r, e} = $e_node.syncApi_Childprocess_Kill({pid: pid});
                 }
-            },
-            stdout: {
-                on: (event, cb) => {
-                    proc.stdout_on[event] = cb;
-                }
-            },
-            stderr: {
-                on: (event, cb) => {
-                    proc.stderr_on[event] = cb;
-                }
-            },
-            on: (event, cb) => {
-                proc.on[event] = cb;
-            },
-            disconnect: () => {
-                console.error("process.disconnect", pid);
-                let {r, e} = $e_node.syncApi_Childprocess_Disconnect({pid: pid});
-                if (e!=null) {
-                    throw "child_process.disconnect error: "+e;
-                }
-            },
-            kill: (signal) => {
-                console.error("process.kill", pid);
-                let {r, e} = $e_node.syncApi_Childprocess_Kill({pid: pid});
             }
-        };
+        }
+        let proc = new ProcCls(pid);
         window.__electrico.child_process[pid] = proc;
         return proc;
     }

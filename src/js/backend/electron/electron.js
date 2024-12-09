@@ -1,5 +1,5 @@
 (function () {
-    let EventEmitter = require('eventemitter3');
+    const EventEmitter = require('eventemitter3');
     window.__electrico = window.__electrico || {libs:{}};
     let uuidv4 = window.__uuidv4;
     
@@ -93,10 +93,11 @@
                                 data_blob=msg.data;
                                 msg.data={_electrico_buffer_id:rid};
                             }
+                            let ipcMain = require("electron").ipcMain;
                             for (let p of msg.ports) {
-                                window.__electrico.channel[p.id] = (function(event, message) {
+                                ipcMain.on(p.id, (function(event, message) {
                                     this.onMessageReceived({data:message, portid:p.id, ports:[]});
-                                }).bind(this);
+                                }).bind(this));
                             }
                         } else {
                             msg = msg.data._electrico_args;
@@ -126,6 +127,9 @@
                     };
                     let _postMessage = this.postMessage;
                     this.postMessage = (channel, message, ports) => {
+                        if (ports!=null && ports.length>0) {
+                            console.log("WebContentsCls.postMessage ports", ports);
+                        }
                         _postMessage({channel:channel, message:message}, ports);
                     };
                     this.send = (function(channel, ...args) {
@@ -343,8 +347,12 @@
             this.getLocale = () => {
                 return 'en-US';
             }
+            this.addRecentDocument = (path) => {
+                //TODO
+                console.log("app.addRecentDocument", path);
+            }
             this.clearRecentDocuments = () => {
-
+                //TODO
             };
             this.dock = {
                 setMenu: (menu) => {
@@ -389,6 +397,23 @@
         }
         requestSingleInstanceLock(ad) {
             return true;
+        }
+    }
+    class IPCMainCls extends EventEmitter {
+        constructor() {
+            super();
+            let _this = this;
+            this.handle = (channel, fun) => {
+                _this.on(channel, fun);
+            }
+            this.__callIpc = function(channel, ...args) {
+                let listeners = _this.listeners(channel);
+                if (listeners.length==0) {
+                    console.error("IPCMainCls.__callIpc no handler for channel:", channel);
+                    return null;
+                }
+                return listeners[0](...args);
+            }
         }
     }
     let electron = {
@@ -436,20 +461,7 @@
             }
         },
         app: new AppCls(),
-        ipcMain: {
-            on: (channel, fun) => {
-                window.__electrico.channel[channel]=fun;
-            },
-            handle: (channel, fun) => {
-                window.__electrico.channel[channel]=fun;
-            },
-            off: (channel, fun) => {
-                delete window.__electrico.channel[channel];
-            },
-            removeListener: (channel, fun) => {
-                delete window.__electrico.channel[channel];
-            }
-        },
+        ipcMain: new IPCMainCls(),
         BrowserWindow: BrowserWindow,
         Menu: Menu,
         MenuItem: MenuItem,
@@ -566,7 +578,19 @@
                         }
                         this.postMessage = ((data, ports) => {
                             if (this.started) {
-                                this.connected_port.emit("message", {data:data, ports:ports});
+                                let start = (new Date()).getTime();
+                                let doSend = () => {
+                                    if (this.connected_port.send_locked) {
+                                        if ((new Date()).getTime()-start>60000) {
+                                            console.error("MessageChannelMain ChannelPort.postMessage send_locked timeout (1 min)");
+                                            return;
+                                        }
+                                        setTimeout(doSend, 200);
+                                        return;
+                                    }
+                                    this.connected_port.emit("message", {data:data, ports:ports});
+                                }
+                                doSend();
                             } else {
                                 console.error("postMessage ChannelPort not started", this.id);
                             }
@@ -623,8 +647,8 @@
     };
     electron.TouchBar=class {};
     electron.TouchBar.TouchBarSegmentedControl = class {};
-
-    window.__electrico.libs["electron/main"]=electron;
+    
+    electron.main = electron;
     window.__electrico.libs["electron"]=electron;
 
     var {Buffer} = require("buffer");

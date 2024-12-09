@@ -220,17 +220,21 @@
                                 port.postMessage(args.data);
                             } else {
                                 let ports = args.ports.map((p) => {
-                                    let channel = new MessageChannel();
-                                    let port = channel.port1;
+                                    let mchannel = new MessageChannel();
+                                    let port = mchannel.port1;
                                     port.onmessage = function(e) {
                                         sendIPC(uuidv4(), ipcRenderer.nonce, true, p.id, e.data);
                                     };
                                     window.__electrico.received_ports[p.id] = port;
-                                    let _postMessage=channel.port2.postMessage;
-                                    channel.port2.postMessage = (...args) => {
-                                        _postMessage.bind(channel.port2)(...args);
+                                    let _postMessage=mchannel.port2.postMessage;
+                                    mchannel.port2.postMessage = (...args) => {
+                                        console.log("sendChannelMessage.postMessage", args);
+                                        /*if (Buffer.from(data_blob).toString().indexOf("isExtensionDevelopmentDebug")>=0) {
+                                            console.error("sendIPC send isExtensionDevelopmentDebug");
+                                        }*/                       
+                                        _postMessage.bind(mchannel.port2)(...args);
                                     }
-                                    return channel.port2;
+                                    return mchannel.port2;
                                 });
                                 if (args.fromWebContents) {
                                     let send = {"sender":ipcRenderer, "ports": ports};
@@ -251,7 +255,7 @@
                                 if (this.readyState == 4) {
                                     if (req.status == 200) {
                                         args.data = Buffer.from(req.response);
-                                        console.log("channelMessage", args, args.data.toString());
+                                        //console.log("channelMessage", args, args.data.toString());
                                         doCall();
                                     }
                                 }

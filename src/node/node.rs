@@ -1,4 +1,4 @@
-use std::{collections::HashMap, env};
+use std::{collections::HashMap, env, sync::mpsc::{self, Receiver, Sender}, time::{Duration, SystemTime}};
 use log::{debug, error, info, trace, warn};
 use reqwest::StatusCode;
 use tao::event_loop::EventLoopProxy;
@@ -129,8 +129,25 @@ pub fn process_node_command(tokio_runtime:&Runtime, app_env:&AppEnv,
                 }
             }
         },
-        NodeCommand::GetDataBlob { id } => {
-            if let Some(data) = backend.get_data_blob(id) {
+        NodeCommand::GetDataBlob { id, timeoutms } => {
+            if let Some(timeoutms) = timeoutms {
+                let (blob_sender, blob_receiver): (Sender<Vec<u8>>, Receiver<Vec<u8>>) = mpsc::channel();
+                backend.get_data_blob(id, Some(blob_sender));
+                tokio_runtime.spawn(
+                    async move {
+                        let start = SystemTime::now();
+                        while start.elapsed().unwrap().as_millis()<timeoutms.into() {
+                            if let Ok(data) = blob_receiver.try_recv() {
+                                respond_status(StatusCode::OK, CONTENT_TYPE_BIN.to_string(), data, responder);
+                                return;
+                            }
+                        }
+                        respond_404(responder);
+                    }
+                );
+                return;
+            }
+            if let Some(data) = backend.get_data_blob(id, None) {
                 respond_status(StatusCode::OK, CONTENT_TYPE_BIN.to_string(), data, responder);
             } else {
                 respond_404(responder);

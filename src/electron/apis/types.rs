@@ -12,6 +12,7 @@ pub enum DialogCommand {
     ShowSaveDialogSync {options:FileDialogOptions},
     ShowSaveDialog {window_id:Option<String>, options:FileDialogOptions},
     ShowMessageBoxSync {options:ShowMessageBoxOptions},
+    ShowMessageBox {window_id:Option<String>, options:ShowMessageBoxOptions},
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -35,11 +36,9 @@ pub struct ShowMessageBoxOptions {
   #[serde(rename = "buttonLabel")]
   pub title: Option<String>,
   pub detail: Option<String>,
-}
-impl ShowMessageBoxOptions {
-  pub fn new(message: String) -> ShowMessageBoxOptions {
-    ShowMessageBoxOptions {message, msg_type:None, title:None, detail:None }
-  }
+  pub buttons: Option<Vec<String>>,
+  #[serde(rename = "cancelId")]
+  pub cancel_id:Option<i32>
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]

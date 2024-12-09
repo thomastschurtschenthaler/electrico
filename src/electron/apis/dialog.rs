@@ -1,7 +1,7 @@
 
 use log::{error, debug, trace};
 use reqwest::StatusCode;
-use rfd::MessageLevel;
+use rfd::{MessageButtons, MessageLevel};
 use tao::event_loop::EventLoopProxy;
 use tokio::runtime::Runtime;
 use wry::{http::Response, RequestAsyncResponder};
@@ -20,7 +20,7 @@ pub fn process_dialog_command(tokio_runtime:&Runtime, _app_env:&AppEnv,
     
     match command {
         DialogCommand::ShowOpenDialogSync { options } => {
-            let mut picked:Option<Vec<String>>=None;
+            let mut picked:Vec<String>=Vec::new();
             if let Some(properties) = options.properties {
                 let mut fd = rfd::FileDialog::new();
                 if let Some(filters) = options.filters {
@@ -38,38 +38,38 @@ pub fn process_dialog_command(tokio_runtime:&Runtime, _app_env:&AppEnv,
                 if properties.contains(&"createDirectory".to_string()) {
                     fd = fd.set_can_create_directories(true);
                 }
-                if properties.contains(&"openFile".to_string()) {
-                    if properties.contains(&"multiSelections".to_string()) {
-                        match fd.pick_files() {
-                            Some(sel) => {
-                                picked = Some(sel.into_iter().map(|p| p.as_os_str().to_str().unwrap().to_string()).collect());
-                            },
-                            None => {}
-                        }
-                    } else {
-                        match fd.pick_file() {
-                            Some(sel) => {
-                                let mut p:Vec<String> = Vec::new();
-                                p.push(sel.as_os_str().to_str().unwrap().to_string());
-                                picked = Some(p);
-                            },
-                            None => {}
-                        }
-                    }
-                } else if properties.contains(&"openDirectory".to_string()) {
+                if properties.contains(&"openDirectory".to_string()) {
                     if properties.contains(&"multiSelections".to_string()) {
                         match fd.pick_folders() {
                             Some(sel) => {
-                                picked = Some(sel.into_iter().map(|p| p.as_os_str().to_str().unwrap().to_string()).collect());
+                                for p in sel {
+                                    picked.push(p.as_os_str().to_str().unwrap().to_string());
+                                }
                             },
                             None => {}
                         }
                     } else {
                         match fd.pick_folder() {
                             Some(sel) => {
-                                let mut p:Vec<String> = Vec::new();
-                                p.push(sel.as_os_str().to_str().unwrap().to_string());
-                                picked = Some(p);
+                                picked.push(sel.as_os_str().to_str().unwrap().to_string());
+                            },
+                            None => {}
+                        }
+                    }
+                } else if properties.contains(&"openFile".to_string()) {
+                    if properties.contains(&"multiSelections".to_string()) {
+                        match fd.pick_files() {
+                            Some(sel) => {
+                                for p in sel {
+                                    picked.push(p.as_os_str().to_str().unwrap().to_string());
+                                }
+                            },
+                            None => {}
+                        }
+                    } else {
+                        match fd.pick_file() {
+                            Some(sel) => {
+                                picked.push(sel.as_os_str().to_str().unwrap().to_string());
                             },
                             None => {}
                         }
@@ -91,7 +91,7 @@ pub fn process_dialog_command(tokio_runtime:&Runtime, _app_env:&AppEnv,
             }
             tokio_runtime.spawn(
                 async move {
-                    let mut picked:Option<Vec<String>>=None;
+                    let mut picked:Vec<String>=Vec::new();
                     if let Some(properties) = options.properties {
                         let mut fd = rfd::AsyncFileDialog::new();
                         if let Some(filters) = options.filters {
@@ -109,11 +109,31 @@ pub fn process_dialog_command(tokio_runtime:&Runtime, _app_env:&AppEnv,
                         if properties.contains(&"createDirectory".to_string()) {
                             fd = fd.set_can_create_directories(true);
                         }
-                        if properties.contains(&"openFile".to_string()) {
+                        if properties.contains(&"openDirectory".to_string()) {
+                            if properties.contains(&"multiSelections".to_string()) {
+                                match fd.pick_folders().await {
+                                    Some(sel) => {
+                                        for p in sel {
+                                            picked.push(p.path().as_os_str().to_str().unwrap().to_string());
+                                        }
+                                    },
+                                    None => {}
+                                }
+                            } else {
+                                match fd.pick_folder().await {
+                                    Some(sel) => {
+                                        picked.push(sel.path().as_os_str().to_str().unwrap().to_string());
+                                    },
+                                    None => {}
+                                }
+                            }
+                        } else if properties.contains(&"openFile".to_string()) {
                             if properties.contains(&"multiSelections".to_string()) {
                                 match fd.pick_files().await {
                                     Some(sel) => {
-                                        picked = Some(sel.into_iter().map(|p| p.path().as_os_str().to_str().unwrap().to_string()).collect());
+                                        for p in sel {
+                                            picked.push(p.path().as_os_str().to_str().unwrap().to_string());
+                                        }
                                     },
                                     None => {}
                                 }
@@ -121,31 +141,12 @@ pub fn process_dialog_command(tokio_runtime:&Runtime, _app_env:&AppEnv,
                                 match fd.pick_file().await {
                                     Some(sel) => {
                                         let mut p:Vec<String> = Vec::new();
-                                        p.push(sel.path().as_os_str().to_str().unwrap().to_string());
-                                        picked = Some(p);
+                                        picked.push(sel.path().as_os_str().to_str().unwrap().to_string());
                                     },
                                     None => {}
                                 }
                             }
-                        } else if properties.contains(&"openDirectory".to_string()) {
-                            if properties.contains(&"multiSelections".to_string()) {
-                                match fd.pick_folders().await {
-                                    Some(sel) => {
-                                        picked = Some(sel.into_iter().map(|p| p.path().as_os_str().to_str().unwrap().to_string()).collect());
-                                    },
-                                    None => {}
-                                }
-                            } else {
-                                match fd.pick_folder().await {
-                                    Some(sel) => {
-                                        let mut p:Vec<String> = Vec::new();
-                                        p.push(sel.path().as_os_str().to_str().unwrap().to_string());
-                                        picked = Some(p);
-                                    },
-                                    None => {}
-                                }
-                            }
-                        } 
+                        }
                     }
                     match serde_json::to_string(&picked) {
                         Ok(json) => {
@@ -249,6 +250,67 @@ pub fn process_dialog_command(tokio_runtime:&Runtime, _app_env:&AppEnv,
             respond_ok(responder);
             dialog.show();
             
+        },
+        DialogCommand::ShowMessageBox {window_id, options } => {
+            if let Some(window_id) = window_id {
+                frontend.set_focus(&window_id);
+            }
+            tokio_runtime.spawn(
+                async move {
+                    let mut dialog = rfd::AsyncMessageDialog::new();
+                    let mut desc = options.message;
+                    if let Some(detail) = options.detail {
+                        desc = desc + " - " + detail.as_str();
+                    }
+                    dialog = dialog.set_description(desc);
+                    let mut ok = "Ok".to_string();
+                    let mut cancel = "Cancel".to_string();
+                    if let Some(buttons) = options.buttons {
+                        if buttons.len()>0 {
+                            let btns:MessageButtons;
+                            ok = buttons.get(0).unwrap().clone();
+                            if buttons.len()==1 {
+                                btns=MessageButtons::OkCustom(ok.clone());
+                            } else {
+                                cancel = buttons.get(1).unwrap().clone();
+                                if buttons.len()==2 {
+                                    btns=MessageButtons::OkCancelCustom(ok.clone(), cancel.clone());
+                                } else {
+                                    btns=MessageButtons::YesNoCancelCustom(ok.clone(), cancel.clone(), buttons.get(2).unwrap().clone());
+                                }
+                            }
+                            dialog = dialog.set_buttons(btns);
+                        }
+                    }
+                   
+                    if let Some(title) = options.title {
+                        dialog = dialog.set_title(title.as_str());
+                    }
+                    if let Some(msg_type) = options.msg_type {
+                        if msg_type=="error" {
+                            dialog = dialog.set_level(MessageLevel::Error);
+                        } else if msg_type=="info" {
+                            dialog = dialog.set_level(MessageLevel::Info);
+                        }
+                    }
+                    let res = dialog.show().await;
+                    match res {
+                        rfd::MessageDialogResult::Custom(custom) => {
+                            if custom==ok {
+                                respond_status(StatusCode::OK, CONTENT_TYPE_JSON.to_string(), "0".to_string().into_bytes(), responder);
+                            } else if custom==cancel {
+                                respond_status(StatusCode::OK, CONTENT_TYPE_JSON.to_string(), "1".to_string().into_bytes(), responder);
+                            } else {
+                                respond_status(StatusCode::OK, CONTENT_TYPE_JSON.to_string(), "2".to_string().into_bytes(), responder);
+                            }
+                        },
+                        _ => {
+                            respond_status(StatusCode::OK, CONTENT_TYPE_JSON.to_string(), "".to_string().into_bytes(), responder);
+                        }
+                    }
+                    
+                }
+            );
         }
     }
 }

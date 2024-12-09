@@ -5,7 +5,7 @@ mod backend;
 mod frontend;
 mod node;
 mod electron;
-use std::{fs::{self}, io::{self, Write}, path::{Path, PathBuf}, str::FromStr, sync::mpsc::{self, Receiver, Sender}, time::{Duration, SystemTime}};
+use std::{fs::{self}, io::{self, stdin, Read, Write}, path::{Path, PathBuf}, str::FromStr, sync::mpsc::{self, Receiver, Sender}, time::{Duration, SystemTime}};
 
 use electron::electron::process_electron_command;
 use env_logger::Env;
@@ -49,21 +49,38 @@ fn main() -> wry::Result<()> {
   let args = Args::parse();
   let mut _tmpdir_h:Option<TempDir> = None;
   let mut add_args: Vec<String> = Vec::new();
-  if let Some(p) = args.param {
+  let mut event_loop:EventLoop<ElectricoEvents> = EventLoopBuilder::with_user_event().build();
+
+  if let Some(mut p) = args.param {
     package = Package::new("shell.js".to_string(), "1".to_string(), "shell".to_string());
     let tmpdir:TempDir = tempfile::tempdir().unwrap();
     let mut tmppath = PathBuf::from(tmpdir.path());
     _tmpdir_h = Some(tmpdir);
     rsrc_dir = tmppath.clone();
     tmppath.push("shell.js");
+    
     trace!("tmp path: {}", tmppath.as_os_str().to_str().unwrap());
+    if p.len()==0 {
+      let stdin_buff:&mut [u8] = &mut [0; 8192];
+      if let Ok(read) = stdin().read(stdin_buff) {
+        p = String::from_utf8(stdin_buff[0..read].to_vec()).unwrap();
+      }
+    }
     let _ = fs::write(tmppath, format!("
-        let r = eval('{}'); 
-        let req = window.createCMDRequest(true, 'ShellCallback');
-        req.send(JSON.stringify({{action:'ShellCallback', 'stdout':r+''}}));
-        ", escape(&p)));
+        (async function() {{
+          let r = null;
+          try {{r = await eval('{}');}} catch (e) {{r='\\n'}}; 
+          let req = window.createCMDRequest(true, 'ShellCallback');
+          req.send(JSON.stringify({{action:'ShellCallback', 'stdout':r+''}}));
+        }})()", escape(&p)));
   } else if let Some(f) = args.fork {
     trace!("fork: {}", f);
+    #[cfg(target_os = "macos")] {
+      #[cfg(not(debug_assertions))] {
+        use tao::platform::macos::{ActivationPolicy, EventLoopExtMacOS};
+        event_loop.set_activation_policy(ActivationPolicy::Accessory);
+      }
+    }
     let fork_params:ForkParams = serde_json::from_str(f.as_str()).expect("Can't deserialize fork parameter json");
     add_args.append(&mut fork_params.args.clone());
     package = Package::new_fork(fork_params.module_main, "1".to_string(), "fork".to_string(), fork_params.hook, fork_params.clientid, fork_params.env);
@@ -105,8 +122,7 @@ fn main() -> wry::Result<()> {
   let mut app_env = AppEnv::new(rsrc_dir.as_os_str().to_str().unwrap().to_string(), &mut add_args);
 
   let frontend_js_files = build_file_map(&JS_DIR_FRONTEND);
-
-  let event_loop:EventLoop<ElectricoEvents> = EventLoopBuilder::with_user_event().build();
+  
   let proxy: tao::event_loop::EventLoopProxy<ElectricoEvents> = event_loop.create_proxy();
   
   let mut backend = Backend::new(rsrc_dir.clone(), &package, &event_loop, proxy.clone());

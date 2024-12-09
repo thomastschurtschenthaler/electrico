@@ -296,9 +296,18 @@
                 cb = options;
                 options=null;
             }
+            $e_node.asyncApi_FS_RealPath({"path":path}).then((e, r) => {
+                cb(e, r);
+            });
+        },
+        realpathSync: (path, options) => {
+            if (cb==null) {
+                cb = options;
+                options=null;
+            }
             let {r, e} = $e_node.syncApi_FS_RealPath({"path":path});
-            if (e!=null) throw "realpath failed: "+path;
-            cb(null, r);
+            if (e!=null) throw "realpathSync failed: "+path;
+            return r;
         },
         fdatasync: (fd, cb) => {
             $e_node.asyncApi_FS_Fdatasync({"fd":fd}).then((e, r) => {
@@ -368,6 +377,17 @@
                             reject(e);
                         } else {
                             resolve();
+                        }
+                    })
+                });
+            },
+            realpath: (path, options) => {
+                return new Promise((resolve, reject)=>{
+                    fs.realpath(path, options, (e, r) => {
+                        if (e!=null) {
+                            reject(e);
+                        } else {
+                            resolve(r);
                         }
                     })
                 });

@@ -53,6 +53,12 @@
             },
             arch: () => {
                 return "arm";
+            },
+            platform: () => {
+                return process.platform;
+            },
+            type: () => {
+                return process.platform=="darwin"?"Darwin":(process.platform=="linux"?"Linux":"Windows_NT");
             }
         },
         querystring: queryString,
@@ -61,40 +67,6 @@
         url: {
             fileURLToPath: (file) => {
                 return file;
-            }
-        },
-        module: {
-            createRequire: (file) => {
-                return require;
-            },
-            register: (script, path) => {
-
-            }
-        },
-        crypto: {
-            createHash: (alg) => {
-                let calgr;
-                if (alg=="sha256") {
-                    calgr = require("crypto-js/sha256");
-                } else if (alg=="md5") {
-                    calgr = require("crypto-js/md5");
-                } else {
-                    throw "createHash - unknown algorithm: "+alg;
-                }
-                return {
-                    update: (text) => {
-                        let hash = calgr(text);
-                        return {
-                            digest: (d) => {
-                                if (d=="hex") {
-                                    return hash.toString();
-                                } else {
-                                    throw "createHash - unknown digest: "+d;
-                                }
-                            }
-                        }
-                    }
-                }
             }
         },
         zlib :{
@@ -155,6 +127,11 @@
                 return inflate; 
             }
         },
+        timers: {
+            setImmediate(cb) {
+                setTimeout(cb, 0);
+            }
+        },
         tls: {
             createSecureContext: (options) => {
                 console.log("tls.createSecureContext", options);
@@ -163,9 +140,11 @@
         },
         tty: {
             isatty: (fd) => {
-                console.error("tty.isatty", fd);
                 return true;
             }
+        },
+        dns: {
+
         },
         assert: {
 
@@ -181,7 +160,8 @@
                 console.log("readline.createInterface");
                 return null;
             }
-        }
+        },
+        buffer: require("buffer")
     };
     
     window.__electrico.libs["node:path"] = node.path;
@@ -196,10 +176,6 @@
     window.__electrico.libs.events = node.events;
     window.__electrico.libs["node:url"] = node.url;
     window.__electrico.libs.url = node.url;
-    window.__electrico.libs["node:module"] =node.module;
-    window.__electrico.libs.module = node.module;
-    window.__electrico.libs["node:crypto"] =node.crypto;
-    window.__electrico.libs.crypto = node.crypto;
     window.__electrico.libs["node:zlib"] =node.zlib;
     window.__electrico.libs.zlib = node.zlib;
     window.__electrico.libs["node:assert"] =node.assert;
@@ -212,6 +188,12 @@
     window.__electrico.libs.tls = node.tls;
     window.__electrico.libs["node:tty"] =node.tty;
     window.__electrico.libs.tty = node.tty;
+    window.__electrico.libs["node:dns"] = node.dns;
+    window.__electrico.libs.dns = node.dns;
+    window.__electrico.libs["node:timers"] = node.timers;
+    window.__electrico.libs.timers = node.timers;
+    window.__electrico.libs["node:buffer"] = node.buffer;
+    window.__electrico.libs.buffer = node.buffer;
 
     require("./apis/apis.js");
     require("./addons/addons.js");

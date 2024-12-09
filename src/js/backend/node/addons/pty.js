@@ -1,5 +1,6 @@
 (function() {
-    let uuidv4 = window.__uuidv4;
+    const uuidv4 = window.__uuidv4;
+    const EventEmitter = require('eventemitter3');
     let PTY = {
         spawn: (shell, args, opt) => {
             console.log("PTY.spawn", shell, args, opt);
@@ -15,18 +16,21 @@
             if (e!=null) {
                 throw "PTY.spawn: "+e;
             }
-            pcp = {
-                on: {}
+            class PcpCls extends EventEmitter {
+                constructor() {
+                    super();
+                    this.stdout = new EventEmitter();
+                    this.stderr = new EventEmitter();
+                }
             }
+            let pcp = new PcpCls();
             window.__electrico.child_process[id] = pcp;
             let ptyProcess = {
                 pid:parseInt(r),
                 onData: (cb) => {
-                    pcp.stdout_on = {
-                        data: (data) => {
-                            cb({data:data});
-                        }
-                    }
+                    pcp.stdout.on("data", (data) => {
+                        cb({data:data});
+                    });
                 },
                 write: (data) => {
                     let {r, e} = $e_node.syncApi_Childprocess_StdinWrite({pid: id}, data);
@@ -39,9 +43,9 @@
                     console.error("ptyProcess.resize", cols, rows);
                 },
                 onExit: (cb) => {
-                    pcp.on.close = (exit_code)=> {
+                    pcp.on("close", (exit_code)=> {
                         cb(exit_code);
-                    }
+                    });
                 }
             }
             

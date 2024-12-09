@@ -1,5 +1,24 @@
 (function() {
+    let JS_EXT = [".js", ".cjs", ".json"];
+    JS_EXT.isExtension = (path) => {
+        return JS_EXT.includes(path.substring(path.lastIndexOf(".")));
+    }
     window.__init_require = function (window) {
+        window.__dirname="";
+        let __module = {
+            _load: (request, parent, isMain) => {
+                return null;
+            },
+            _resolveLookupPaths: (request, parent) => {
+                return request;
+            },
+            createRequire: (file) => {
+                return require;
+            },
+            register: (script, path) => {
+                //let scr = atob(script.split(",")[1]);
+            }
+        };
         //console.trace("__init_require call", window);
         function fromCache(expanded_path) {
             return window.__electrico.module_cache[expanded_path];
@@ -15,26 +34,80 @@
                 }
             }
             let rpath = npath.join("/");
-            if (rpath.startsWith("/")) rpath = rpath.substring(1);
             //console.log(path, rpath);
             return rpath;
         }
-        function loadModule(_this, mpath, cache) {
-            let lib = window.__electrico.getLib(mpath, __electrico_nonce);
-            if (lib!=null) {
-                return lib;
+        function resolveNodeModulesPath(path) {
+            let ix = path.lastIndexOf("/");
+            if (ix<0) return null;
+            let spath = path.substring(0, ix);
+            let nmpath = spath+"/node_modules";
+            let fs = require("fs");
+            if (fs.existsSync(nmpath)) {
+                return nmpath;
             }
+            return resolveNodeModulesPath(spath);
+        }
+        function circularImport(ctx) {
+            let ctxp = ctx;
+            while (ctxp.parent!=null) {
+                ctxp = ctxp.parent;
+                if (ctxp.__filename==ctx.__filename) {
+                    ctxp.circular = ctxp.circular || [];
+                    ctxp.circular.push(ctx);
+                    ctx.lib={};
+                    return new Proxy({}, {
+                        get(target, prop, receiver) {
+                            return ctx.lib[prop];
+                        }
+                    });
+                }
+            }
+            return null;
+        }
+        function resolveCircular(ctx, exported) {
+            if (ctx.circular!=null) {
+                for (let cctx of ctx.circular) {
+                    cctx.lib=exported;
+                }
+            }
+        }
+        function loadModule(_this, mpath, cache) {
+            if (mpath=="module" || mpath=="node:module") {
+                return __module;
+            }
+            if (mpath.endsWith(".node")) {
+                mpath=mpath.substring(mpath.lastIndexOf("/")+1, mpath.length);
+            }
+            let pathparts = mpath.split("/");
+            if (pathparts[0].length>0 && !pathparts[0].startsWith(".")) {
+                let lib = window.__electrico.getLib(pathparts[0], __electrico_nonce);
+                if (lib!=null) {
+                    for (let p of pathparts.slice(1, pathparts.length)) {
+                        lib=lib[p];
+                        if (lib==null) return null;
+                    }
+                    return lib;
+                }
+            }
+            let fromLoader = __module._load(mpath, {"filename":_this!=null?_this.__filename:null}, false);
+            if (fromLoader!=null) {
+                return fromLoader;
+            }
+
             var module = {exports:{__default:{}}}; var exports = {__electrico_deferred:[], __default:{}};
             var __e_exports = function(d) {
                 if (d=="") return exports;
                 return exports.__default;
             };
             let module_path = _this!=null?_this.__import_mpath:"";
-            let expanded_path = module_path;
             if (mpath.startsWith(".")) {
-                expanded_path+="/"+mpath;
+                expanded_path=module_path.length>0?module_path+"/"+mpath:mpath;
+            } else if (mpath.startsWith("/")) {
+                expanded_path=mpath;
             } else {
-                expanded_path="node_modules/"+mpath;
+                let node_modules_base = (_this!=null && _this.node_modules_path!=null)?_this.node_modules_path:"node_modules";
+                expanded_path=node_modules_base+"/"+mpath;
             }
             expanded_path = normalize(expanded_path);
             let cache_path = expanded_path;
@@ -42,35 +115,53 @@
             if (cached!=null && cached!="" && cache) {
                return cached;
             }
+            let expanded_mod_path = expanded_path;
+            if (!JS_EXT.isExtension(expanded_path)) expanded_path += ".js";
+            
             let script=null; let req={};
             if (cached!="") {
-                let jsfilepath = window.__create_protocol_url(window.__create_file_url("electrico-mod/"+((expanded_path.lastIndexOf(".")<expanded_path.lastIndexOf("/"))?expanded_path+".js":expanded_path)));
+                let jsfilepath = window.__create_protocol_url(window.__create_file_url("electrico-mod/"+expanded_path));
                 req = new XMLHttpRequest();
                 req.open("GET", jsfilepath, false);
                 req.send();
             }
             if (cached=="" || req.status==301) {
                 //console.trace("js file not found", expanded_path);
-                let package_path = window.__create_protocol_url(window.__create_file_url("electrico-mod/"+expanded_path+"/package.json"));
-                const preq = new XMLHttpRequest();
+                let package_path = window.__create_protocol_url(window.__create_file_url("electrico-mod/"+expanded_mod_path+"/package.json"));
+                let mainjs = null;
+                let preq = new XMLHttpRequest();
                 preq.open("GET", package_path, false);
                 preq.send();
                 if (preq.status==301) {
-                    console.error("js file not found - no package.json", package_path);
-                    return null;
+                    expanded_mod_path+=".js";
+                    package_path = window.__create_protocol_url(window.__create_file_url("electrico-mod/"+expanded_mod_path+"/package.json"));
+                    preq = new XMLHttpRequest();
+                    preq.open("GET", package_path, false);
+                    preq.send();
+                    if (preq.status==301) {
+                        console.log("no package.json", package_path);
+                    }
+                } 
+                if (preq.status==200) {
+                    let package = JSON.parse(preq.responseText);
+                    mainjs = package.main!=null?package.main:(package.exports!=null?(package.exports.default!=null?package.exports.default:package.exports):(package.files!=null?package.files[0]:null));
                 }
-                let package = JSON.parse(preq.responseText);
-                let mainjs = package.main!=null?package.main:(package.exports!=null?(package.exports.default!=null?package.exports.default:package.exports):package.files[0]);
-                expanded_path = expanded_path+"/"+mainjs;
+                mainjs = mainjs || "index.js";
+                expanded_path = expanded_mod_path+"/"+mainjs;
                 
-                if (!expanded_path.endsWith("js")) expanded_path+=".js";
+                if (!JS_EXT.isExtension(expanded_path)) expanded_path+=".js";
                 expanded_path = normalize(expanded_path);
                 
                 const req2 = new XMLHttpRequest();
                 let jsfilepath = window.__create_protocol_url(window.__create_file_url("electrico-mod/"+expanded_path));
                 req2.open("GET", jsfilepath, false);
                 req2.send();
-                if (req2.status==404) {
+                if (req2.status==301) {
+                    if (_this!=null && _this.node_modules_path!=null) {
+                        console.log("not found in node_modules_path, trying default node_modules", mpath);
+                        delete _this.node_modules_path;
+                        return loadModule(_this, mpath, cache);
+                    }
                     console.error("js file not found", jsfilepath);
                     return null;
                 }
@@ -82,17 +173,29 @@
             if (mpath.endsWith(".json")) {
                 exported = JSON.parse(script);
             } else {
+                let node_modules_path = null;
+                if (_this==null && window.__dirname!="" && expanded_path.startsWith("/")) {
+                    node_modules_path = resolveNodeModulesPath(expanded_path);
+                }
+                
                 let __import_mpath = expanded_path.substring(0, expanded_path.lastIndexOf("/"));
-                let __dirname = window.__dirname+"/"+__import_mpath;
-                let __Import_meta = {url:window.__dirname+"/"+expanded_path};
-                let _this = {"__import_mpath":__import_mpath};
+                let __dirname = __import_mpath.startsWith(window.__dirname)?__import_mpath:window.__dirname+"/"+__import_mpath;
+                let __Import_meta = {url:expanded_path.startsWith(window.__dirname)?expanded_path:window.__dirname+"/"+expanded_path};
+                let _this2 = {"parent": _this, "__import_mpath":__import_mpath, "__filename":__Import_meta.url, "node_modules_path": _this!=null?_this.node_modules_path:null};
+                if (node_modules_path!=null) _this2.node_modules_path=node_modules_path;
+
+                let circular = circularImport(_this2);
+                if (circular!=null) {
+                    return circular;
+                }
+
                 let sourceURL = "//# sourceURL="+expanded_path+"\n";
                 script = window.__replaceImports(script);
-                script = sourceURL+"{\nlet __require_this=_this;"+script+"\n}";
+                script = sourceURL+"{\nlet __require_this=_this2;"+script+"\n}";
                 try {
                     eval(script);
                 } catch (e) {
-                    console.log("require error", expanded_path, script, e);
+                    window._consolelog("require error", expanded_path, script, e);
                     throw e;
                 }
                 if (exports.__electrico_deferred!=null) {
@@ -105,6 +208,8 @@
                 for (let k in exported.__default) {
                     exported[k] = exported.__default[k];
                 }
+
+                resolveCircular(_this2, exported);
             }
             if (cache) {
                 window.__electrico.module_cache[cache_path]=exported;
@@ -193,7 +298,7 @@
             script = script.replaceAll(/\export +(let ) *(([^{ ,;,\n}]*))(.*);/g, export_try_deferred);
             script = script.replaceAll(/\export +(const ) *(([^{ ,;,\n}]*))(.*);/g, export_try_deferred);
 
-            script = script.replaceAll(/\export +(default )?(const )?(var )?(let )? *(([^{ ,;,\n}]*))(.*);/g,"__e_exports('$1')['$6']=$6$7;");
+            script = script.replaceAll(/[ ,\r,\n,;]export +(default )?(const )?(var )?(let )? *(([^{ ,;,\n}]*))(.*);/g,"__e_exports('$1')['$6']=$6$7;");
 
             script = script.replaceAll(/\export +(default)?(const)? *((async +function)?(function)?(function\*)?(async +function\*)?(class)? +([^{ ,(,;,\n}]*))/g, "__e_exports('$1')['$9']=$9=$3");
             script = script.replaceAll('"use strict"', "");

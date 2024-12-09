@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fs::{self, File}, path::{Path, PathBuf}};
+use std::{collections::HashMap, fs::{self, File}, path::{Path, PathBuf}, sync::mpsc::Sender};
 
 use include_dir::{include_dir, Dir};
 use queues::{IsQueue, Queue};
@@ -192,15 +192,22 @@ pub fn is_module_request(host:Option<&str>) -> bool {
     false
 }
 pub struct DataQueue {
-    data_blobs:HashMap<String, Queue<Vec<u8>>>
+    data_blobs:HashMap<String, Queue<Vec<u8>>>,
+    blob_sender:HashMap<String, Sender<Vec<u8>>>
 }
 impl DataQueue {
     pub fn new() -> DataQueue {
         DataQueue {
-            data_blobs:HashMap::new()
+            data_blobs:HashMap::new(),
+            blob_sender:HashMap::new()
         }
     }
-    pub fn add(&mut self, k:&String, data:Vec<u8>) {
+    pub fn add(&mut self, k:&String, data:Vec<u8>) -> bool {
+        if let Some(sender) = self.blob_sender.get_mut(k) {
+            let _ = sender.send(data);
+            self.blob_sender.remove(k);
+            return true;
+        }
         if let Some(q) = self.data_blobs.get_mut(k) {
            let _ = q.add(data);
         } else {
@@ -208,6 +215,7 @@ impl DataQueue {
             let _ = q.add(data);
             self.data_blobs.insert(k.clone(), q);
         }
+        return false;
     }
     pub fn take(&mut self, k:&String) -> Option<Vec<u8>>{
         if let Some(q) = self.data_blobs.get_mut(k) {
@@ -230,5 +238,8 @@ impl DataQueue {
            return q.size();
         }
         return 0;
+    }
+    pub fn blob_sender(&mut self, k:String, sender:Sender<Vec<u8>>) {
+        self.blob_sender.insert(k, sender);
     }
 }

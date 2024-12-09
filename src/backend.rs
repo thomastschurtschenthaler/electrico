@@ -87,8 +87,12 @@ impl Backend {
             let rpath = request.uri().path().to_string();
             trace!("backend fil: request {}", rpath);
             let fpath = rpath.substring(1, rpath.len()).to_string();
-            
-            let file = src_dir.join(fpath.clone());
+            let file:PathBuf;
+            if fpath.starts_with("/") {
+                file = PathBuf::from(fpath.clone());
+            } else {
+                file = src_dir.join(fpath.clone());
+            } 
             trace!("trying load file {}", file.clone().as_mut_os_str().to_str().unwrap());
             handle_file_request(&tokio_runtime, is_module_request(request.uri().host()), fpath, file, &backend_js_files, responder);
         };
@@ -123,7 +127,7 @@ impl Backend {
             .with_asynchronous_custom_protocol("fil".into(), fil_handler)
             .with_asynchronous_custom_protocol("cmd".into(), cmd_handler)
             .with_devtools(true)
-            .with_incognito(true)
+            .with_incognito(false)
             .with_initialization_script(("window.__is_windows=".to_string()+is_windows+";"+init_script.as_str()).as_str())
             .build().unwrap();
           
@@ -165,7 +169,9 @@ impl Backend {
          let request_id2 = request_id.clone();
          trace!("call_ipc_channel {} {}", &request_id2, &params);
          if let Some(data) = data_blob {
-            self.data_queue.add(&request_id, data);
+            if self.data_queue.add(&request_id, data) {
+                return;
+            }
         }
         let retry_sender = self.command_sender.clone();
          _ = self.webview.evaluate_script_with_callback(
@@ -208,7 +214,9 @@ impl Backend {
             trace!("child_process_callback {} {}", stream, pid);
             if let Some(data) = data {
                 let data_key = pid.clone()+stream.as_str();
-                self.data_queue.add(&data_key, data);
+                if self.data_queue.add(&data_key, data) {
+                    return;
+                }
             }
             let retry_sender = self.command_sender.clone();
             let _ = self.webview.evaluate_script_with_callback(&format!("window.__electrico.call(()=>{{window.__electrico.child_process.callback.on_{}('{}');}});", stream, pid), move |r| {
@@ -328,7 +336,9 @@ impl Backend {
     }
     pub fn net_connection_data(&mut self, id:String, data:Option<Vec<u8>>) {
         if let Some(data) = data {
-            self.data_queue.add(&id, data);
+            if  self.data_queue.add(&id, data) {
+                return;
+            }
         }
         let call_script=format!("window.__electrico.net_server.callback.on_data('{}');", id);
         let retry_sender = self.command_sender.clone();
@@ -379,7 +389,11 @@ impl Backend {
             error!("net_write_connection no sender for id {}", id);
         }
     }
-    pub fn get_data_blob(&mut self, id:String) -> Option<Vec<u8>> {
+    pub fn get_data_blob(&mut self, id:String, blob_sender:Option<Sender<Vec<u8>>>) -> Option<Vec<u8>> {
+        if let Some(blob_sender) = blob_sender {
+            self.data_queue.blob_sender(id, blob_sender);
+            return None;
+        }
         let data:Option<Vec<u8>>;
         if let Some(d) = self.data_queue.take(&id) {
             data = Some(d.to_vec());
@@ -388,6 +402,7 @@ impl Backend {
         };
         return data;
     }
+    
     pub fn process_commands(&mut self) {
         if let Ok(command) = self.command_receiver.try_recv() {
             match command {
