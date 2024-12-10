@@ -658,4 +658,5 @@
     window.__electrico.appPath = r;
 
     require("./apis/apis.js");
+    delete window.indexedDB;
 })();

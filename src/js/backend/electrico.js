@@ -1,6 +1,6 @@
 var __electrico_nonce=null;
 (function() {
-    let wkeys = ['location', 'screen', '__is_windows', 'crypto', 'indexedDB', 'createWindow', 'setTimeout', 'setInterval', 'clearTimeout','clearInterval', 'fetch', '__init_shared', '__init_require', 'btoa', 'atob', 'performance'];
+    let wkeys = ['location', 'screen', '__is_windows', 'crypto', 'createWindow', 'setTimeout', 'setInterval', 'clearTimeout','clearInterval', 'fetch', '__init_shared', '__init_require', 'btoa', 'atob', 'performance'];
     for (let k in window) {
         if (!wkeys.includes(k)) {
             window[k]=()=>{};
@@ -292,6 +292,9 @@ var __electrico_nonce=null;
         loadMain: (main) => {
             window.__dirname = window.__electrico.appPath;
             window.__Import_meta = {url:window.__dirname};
+            if (main==null) {
+                return;
+            }
             if (!main.startsWith("./")) {
                 main = "./"+main;
             }

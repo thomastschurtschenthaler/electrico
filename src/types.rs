@@ -8,7 +8,7 @@ pub struct Resources {
     pub link: Option<String>
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
 pub struct Package {
     pub main: String,
     pub version: String,

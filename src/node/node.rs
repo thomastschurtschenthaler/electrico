@@ -1,11 +1,11 @@
-use std::{collections::HashMap, env, sync::mpsc::{self, Receiver, Sender}, time::{Duration, SystemTime}};
+use std::{collections::HashMap, env, path::PathBuf, sync::mpsc::{self, Receiver, Sender}, time::{Duration, SystemTime}};
 use log::{debug, error, info, trace, warn};
 use reqwest::StatusCode;
 use tao::event_loop::EventLoopProxy;
 use tokio::runtime::Runtime;
 use wry::{webview_version, RequestAsyncResponder};
 
-use crate::{backend::Backend, common::{respond_404, respond_ok, respond_status, CONTENT_TYPE_BIN, CONTENT_TYPE_JSON, CONTENT_TYPE_TEXT}, node::types::{Process, ProcessVersions}, types::ElectricoEvents};
+use crate::{backend::Backend, common::{respond_404, respond_client_error, respond_ok, respond_status, CONTENT_TYPE_BIN, CONTENT_TYPE_JSON, CONTENT_TYPE_TEXT}, node::types::{Process, ProcessVersions}, types::ElectricoEvents};
 use super::{apis, addons, types::{ConsoleLogLevel, NodeCommand}};
 
 pub struct AppEnv {
@@ -129,29 +129,34 @@ pub fn process_node_command(tokio_runtime:&Runtime, app_env:&AppEnv,
                 }
             }
         },
-        NodeCommand::GetDataBlob { id, timeoutms } => {
-            if let Some(timeoutms) = timeoutms {
-                let (blob_sender, blob_receiver): (Sender<Vec<u8>>, Receiver<Vec<u8>>) = mpsc::channel();
-                backend.get_data_blob(id, Some(blob_sender));
-                tokio_runtime.spawn(
-                    async move {
-                        let start = SystemTime::now();
-                        while start.elapsed().unwrap().as_millis()<timeoutms.into() {
-                            if let Ok(data) = blob_receiver.try_recv() {
-                                respond_status(StatusCode::OK, CONTENT_TYPE_BIN.to_string(), data, responder);
-                                return;
-                            }
-                        }
-                        respond_404(responder);
-                    }
-                );
-                return;
-            }
-            if let Some(data) = backend.get_data_blob(id, None) {
+        NodeCommand::GetDataBlob { id} => {
+            if let Some(data) = backend.get_data_blob(id) {
                 respond_status(StatusCode::OK, CONTENT_TYPE_BIN.to_string(), data, responder);
             } else {
                 respond_404(responder);
             }
+        },
+        NodeCommand::ExecuteSync { script } => {
+            let (sender, receiver): (Sender<(bool, Vec<u8>)>, Receiver<(bool, Vec<u8>)>) = mpsc::channel();
+            tokio_runtime.spawn(
+                async move {
+                    loop {
+                        if let Ok(response) = receiver.try_recv() {
+                            if response.0 {
+                                respond_status(StatusCode::OK, CONTENT_TYPE_BIN.to_string(), response.1, responder);
+                            } else {
+                                respond_status(StatusCode::BAD_REQUEST, CONTENT_TYPE_BIN.to_string(), response.1, responder);
+                            }
+                            return;
+                        }
+                    }
+                }
+            );
+            backend.execute_sync(proxy, script, sender);
+        },
+        NodeCommand::ExecuteSyncResponse { uuid, data, error } => {
+            respond_ok(responder);
+            backend.execute_sync_response(uuid, data, error);
         },
         NodeCommand::Api { data } => {
             apis::apis::process_command(tokio_runtime, app_env, proxy, backend, data, responder, data_blob); 

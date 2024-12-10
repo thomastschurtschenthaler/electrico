@@ -52,12 +52,12 @@ fn main() -> wry::Result<()> {
   let mut event_loop:EventLoop<ElectricoEvents> = EventLoopBuilder::with_user_event().build();
 
   if let Some(mut p) = args.param {
-    package = Package::new("shell.js".to_string(), "1".to_string(), "shell".to_string());
+    package = Package::new("electrico_shell.js".to_string(), "1".to_string(), "electrico_shell".to_string());
     let tmpdir:TempDir = tempfile::tempdir().unwrap();
     let mut tmppath = PathBuf::from(tmpdir.path());
     _tmpdir_h = Some(tmpdir);
     rsrc_dir = tmppath.clone();
-    tmppath.push("shell.js");
+    tmppath.push("electrico_shell.js");
     
     trace!("tmp path: {}", tmppath.as_os_str().to_str().unwrap());
     if p.len()==0 {
@@ -125,7 +125,7 @@ fn main() -> wry::Result<()> {
   
   let proxy: tao::event_loop::EventLoopProxy<ElectricoEvents> = event_loop.create_proxy();
   
-  let mut backend = Backend::new(rsrc_dir.clone(), &package, &event_loop, proxy.clone());
+  let mut backend = Backend::new(rsrc_dir.clone(), package.clone(), &event_loop, proxy.clone());
   let mut frontend = Frontend::new(rsrc_dir.clone());
   let mut ipc_channel = IPCChannel::new();
   

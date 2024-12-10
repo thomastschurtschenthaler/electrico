@@ -1,6 +1,7 @@
 (function() {
+    let indexedDB = window.indexedDB;
     function electricoStore(cb) {
-        const dbo = window.indexedDB.open("electricoStore", 1);
+        const dbo = indexedDB.open("electricoStore", 1);
         dbo.onupgradeneeded = function() {
             const db = dbo.result;
             db.createObjectStore("electricoStore", {keyPath: "id"});
@@ -33,21 +34,22 @@
                             cb(null, result.key);
                             return;
                         }
+                        console.log("creating new key");
+                        const newKey = await crypto.subtle.generateKey(
+                            { name: "AES-GCM", length: 256 },
+                            false,
+                            ['encrypt', 'decrypt']
+                        );
+                        let put = store.put({id: 1, key: newKey});
+                        put.onsuccess = function() {
+                            cb(null, newKey);
+                        };
+                        put.onerror = function(e) {
+                            cb(e);
+                        }
                     } catch (e) {
                         cb("retrieveKey error:"+e);
                         return;
-                    }
-                    const newKey = await crypto.subtle.generateKey(
-                        { name: "AES-GCM", length: 256 },
-                        false,
-                        ['encrypt', 'decrypt']
-                    );
-                    let put = store.put({id: 1, key: newKey});
-                    put.onsuccess = function() {
-                        cb(null, newKey);
-                    };
-                    put.onerror = function(e) {
-                        cb(e);
                     }
                 };
                 data.onerror = function(e) {
@@ -76,11 +78,15 @@
                     if (key==null) {
                         rej("encryptStringAsync - key is null"); return;
                     }
-                    const encoded = new TextEncoder().encode(text);
-                    const iv = crypto.getRandomValues(new Uint8Array(12));
-                    const ciphertext = await crypto.subtle.encrypt({name:"AES-GCM", iv:iv}, key, encoded);
-                    const buf = Buffer.concat([Buffer.from(iv), Buffer.from(ciphertext)]);
-                    res(buf.toString("base64"));
+                    try {
+                        const encoded = new TextEncoder().encode(text);
+                        const iv = crypto.getRandomValues(new Uint8Array(12));
+                        const ciphertext = await crypto.subtle.encrypt({name:"AES-GCM", iv:iv}, key, encoded);
+                        const buf = Buffer.concat([Buffer.from(iv), Buffer.from(ciphertext)]);
+                        res(buf.toString("base64"));
+                    } catch (e) {
+                        rej(e);
+                    }
                 });
             });
         },
@@ -94,27 +100,28 @@
                     if (key==null) {
                         rej("decryptStringAsync - key is null"); return;
                     }
-                    const iv = buffer.subarray(0, 12);
-                    const ebuffer = buffer.subarray(12, buffer.length);
-                    const cleartext = await crypto.subtle.decrypt({name:"AES-GCM", iv:iv}, key, ebuffer);
-                    const text = new TextDecoder().decode(cleartext);
-                    res(text);
+                    try {
+                        const iv = buffer.subarray(0, 12);
+                        const ebuffer = buffer.subarray(12, buffer.length);
+                        const cleartext = await crypto.subtle.decrypt({name:"AES-GCM", iv:iv}, key, ebuffer);
+                        const text = new TextDecoder().decode(cleartext);
+                        res(text);
+                    } catch (e) {
+                        rej(e);
+                    }
                 });
             });
         },
         isEncryptionAvailable: () => {
-            let script = 'let _req=require;_req("electron").safeStorage.isEncryptionAvailableAsync();';
-            let child = spawn(process.execPath, ["-p", script]);
-            let {r, e} = $e_node.syncGetDataBlobBin({"id":child.pid+"stdout", "timeoutms":600000});
+            let script = '(async function() {let _req=require; return await _req("electron").safeStorage.isEncryptionAvailableAsync();})()';
+            let {r, e} = $e_node.syncExecuteSync({"script":script});
             if (e!=null) return false;
             let res = Buffer.from(r).toString();
             return res=="true";
         },
         encryptString: function(text) {
-            let script = 'let _req=require;_req("electron").safeStorage.encryptStringAsync(\''+text.replaceAll("'", "\'").replaceAll("\r", "\\r").replaceAll("\n", "\\n")+'\');';
-            let child = spawn(process.execPath, ["-p", ""]);
-            child.stdin.write(script);
-            let {r, e} = $e_node.syncGetDataBlobBin({"id":child.pid+"stdout", "timeoutms":600000});
+            let script = '(async function() {let _req=require; return await _req("electron").safeStorage.encryptStringAsync(\''+text.replaceAll("'", "\'").replaceAll("\r", "\\r").replaceAll("\n", "\\n")+'\');})()';
+            let {r, e} = $e_node.syncExecuteSync({"script":script});
             if (e!=null) throw "encryptString error: "+e;
             r = Buffer.from(r).toString();
             if (r.trim().length==0) throw "encryptString error: no key";
@@ -123,13 +130,12 @@
         },
         decryptString: function(buffer) {
             let bufferbase64 = buffer.toString("base64");
-            let script = 'let _req=require;_req("electron").safeStorage.decryptStringAsync(\''+bufferbase64+'\');';
-            let child = spawn(process.execPath, ["-p", ""]);
-            child.stdin.write(script);
-            let {r, e} = $e_node.syncGetDataBlobBin({"id":child.pid+"stdout", "timeoutms":600000});
+            let script = '(async function() {let _req=require; return await _req("electron").safeStorage.decryptStringAsync(\''+bufferbase64+'\');})()';
+            let {r, e} = $e_node.syncExecuteSync({"script":script});
             if (e!=null) throw "decryptString error: "+e;
             r = Buffer.from(r).toString();
             if (r.trim().length==0) throw "decryptString error: no key";
+            console.log("decryptString", r);
             return r;
         },
     };

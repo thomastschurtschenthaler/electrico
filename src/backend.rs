@@ -1,4 +1,4 @@
-use std::{any::Any, collections::HashMap, fs::File, path::PathBuf, sync::mpsc::{self, Receiver, Sender}};
+use std::{any::Any, borrow::BorrowMut, collections::HashMap, fs::File, hash::{DefaultHasher, Hash, Hasher}, path::PathBuf, sync::mpsc::{self, Receiver, Sender}};
 use muda::MenuId;
 use notify::{Event, RecommendedWatcher};
 use substring::Substring;
@@ -6,14 +6,18 @@ use log::{debug, error, trace};
 use include_dir::{include_dir, Dir};
 use tao::{dpi::PhysicalSize, event_loop::{EventLoop, EventLoopProxy}, window::{Window, WindowBuilder}};
 use tokio::runtime::Runtime;
+use uuid::Uuid;
 use wry::{http::Request, RequestAsyncResponder, WebView, WebViewBuilder};
 use serde_json::Error;
 use crate::{common::{append_js_scripts, build_file_map, escape, get_message_data, handle_file_request, is_module_request, respond_404, DataQueue}, types::{BackendCommand, ChildProcess, NETConnection, NETServer}};
 use crate::types::{Package, ElectricoEvents, Command};
 
 pub struct Backend {
-    _window:Window,
+    window:Window,
+    package:Package,
+    src_dir:PathBuf,
     webview:WebView,
+    webviews:HashMap<String, WebView>,
     command_sender:Sender<BackendCommand>,
     command_receiver:Receiver<BackendCommand>,
     child_process:HashMap<String, tokio::sync::mpsc::Sender<ChildProcess>>,
@@ -26,19 +30,110 @@ pub struct Backend {
     tokio_runtime:Runtime
 }
 
+fn create_web_view (
+        window:&Window, 
+        proxy:EventLoopProxy<ElectricoEvents>,
+        backend_js_files: HashMap<String, Vec<u8>>,
+        src_dir:&PathBuf,
+        package:&Package,
+        init_script:String) -> WebView {
+    let mut is_windows="false";
+    #[cfg(target_os = "windows")] {
+        is_windows = "true";
+    }
+    #[cfg(any(
+        target_os = "windows",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "android"
+    ))]
+    let builder = WebViewBuilder::new(window);
+    
+    #[cfg(not(any(
+        target_os = "windows",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "android"
+    )))]
+    let builder = {
+        use tao::platform::unix::WindowExtUnix;
+        use wry::WebViewBuilderExtUnix;
+        let vbox = window.default_vbox().unwrap();
+        WebViewBuilder::new_gtk(vbox)
+    };
+    let tokio_runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(20).enable_io().enable_time().build().unwrap();
+    let src_dir_fil = src_dir.clone();
+    let fil_handler = move |request: Request<Vec<u8>>, responder:RequestAsyncResponder| {
+        let rpath = request.uri().path().to_string();
+        trace!("backend fil: request {}", rpath);
+        let fpath = rpath.substring(1, rpath.len()).to_string();
+        let file:PathBuf;
+        if fpath.starts_with("/") {
+            file = PathBuf::from(fpath.clone());
+        } else {
+            file = src_dir_fil.join(fpath.clone());
+        } 
+        trace!("trying load file {}", file.clone().as_mut_os_str().to_str().unwrap());
+        handle_file_request(&tokio_runtime, is_module_request(request.uri().host()), fpath, file, &backend_js_files, responder);
+    };
+    let cmd_handler = move |request: Request<Vec<u8>>, responder:RequestAsyncResponder| {
+        let path = request.uri().path().to_string();
+        trace!("backend cmd request {} {}", path, request.body().len());
+        let message_data:Option<(String, Option<Vec<u8>>)> = get_message_data(&request);
+        
+        if let Some(message_data) = message_data {
+            let commandr:Result<Command, Error> = serde_json::from_str(message_data.0.as_str());
+            match commandr {
+                Ok (command) => {
+                    let _ = proxy.send_event(ElectricoEvents::ExecuteCommand{command, responder, data_blob:message_data.1});
+                }
+                Err(e) => {
+                    error!("json serialize error {}", e.to_string());
+                    respond_404(responder);
+                    return;
+                }
+            }
+        } else {
+            respond_404(responder);
+        }
+    };
+    
+    let mut hasher = DefaultHasher::new();
+    format!("{}/{}", src_dir.as_os_str().to_str().unwrap(), package.main.to_string().as_str()).hash(&mut hasher);
+    let hash = format!("{}", hasher.finish());
+    let webview = builder
+        .with_url(format!("e{}://file/backend.html", hash))
+        .with_asynchronous_custom_protocol(format!("e{}", hash).into(), fil_handler)
+        .with_asynchronous_custom_protocol("cmd".into(), cmd_handler)
+        .with_devtools(true)
+        .with_incognito(false)
+        .with_initialization_script(("window.__is_windows=".to_string()+is_windows+";"+init_script.as_str()).as_str())
+        .build().unwrap();
+
+    #[cfg(debug_assertions)]
+    webview.open_devtools();
+    webview
+}
+
+fn backend_resources (package:&Package) -> (HashMap<String, Vec<u8>>, String) {
+    let mut backendjs:String = String::new();
+    const JS_DIR_SHARED: Dir = include_dir!("src/js/shared");
+    backendjs = append_js_scripts(backendjs, JS_DIR_SHARED, Some(".js"));
+    const JS_DIR_BACKEND: Dir = include_dir!("src/js/backend");
+    backendjs = append_js_scripts(backendjs, JS_DIR_BACKEND, Some("electrico.js"));
+    let backend_js_files = build_file_map(&JS_DIR_BACKEND);
+    if let Some(fork) = &package.fork {
+        backendjs = backendjs+format!("\nwindow.__electrico.init_fork('{}', '{}', '{}');", fork.0, fork.1, escape(&fork.2)).as_str();
+    }
+    (backend_js_files, backendjs)
+}
+
 impl Backend {
-    pub fn new(src_dir:PathBuf, package:&Package, event_loop:&EventLoop<ElectricoEvents>, proxy:EventLoopProxy<ElectricoEvents>) -> Backend {
+    pub fn new(src_dir:PathBuf, package:Package, event_loop:&EventLoop<ElectricoEvents>, proxy:EventLoopProxy<ElectricoEvents>) -> Backend {
         let (command_sender, command_receiver): (Sender<BackendCommand>, Receiver<BackendCommand>) = mpsc::channel();
 
-        let mut backendjs:String = String::new();
-        const JS_DIR_SHARED: Dir = include_dir!("src/js/shared");
-        backendjs = append_js_scripts(backendjs, JS_DIR_SHARED, Some(".js"));
-        const JS_DIR_BACKEND: Dir = include_dir!("src/js/backend");
-        backendjs = append_js_scripts(backendjs, JS_DIR_BACKEND, Some("electrico.js"));
-        let backend_js_files = build_file_map(&JS_DIR_BACKEND);
-        if let Some(fork) = &package.fork {
-            backendjs = backendjs+format!("\nwindow.__electrico.init_fork('{}', '{}', '{}');", fork.0, fork.1, escape(&fork.2)).as_str();
-        }
+        let (backend_js_files, backendjs) = backend_resources(&package);
+        
         let init_script = backendjs+"\nwindow.__electrico.loadMain('"+package.main.to_string().as_str()+"');";
         
         let mut window_builder = WindowBuilder::new()
@@ -60,82 +155,14 @@ impl Backend {
             .build(event_loop)
             .unwrap();
         
-        let cmd_handler = move |request: Request<Vec<u8>>, responder:RequestAsyncResponder| {
-            let path = request.uri().path().to_string();
-            trace!("backend cmd request {} {}", path, request.body().len());
-            let message_data:Option<(String, Option<Vec<u8>>)> = get_message_data(&request);
-            
-            if let Some(message_data) = message_data {
-                let commandr:Result<Command, Error> = serde_json::from_str(message_data.0.as_str());
-                match commandr {
-                    Ok (command) => {
-                        let _ = proxy.send_event(ElectricoEvents::ExecuteCommand{command, responder, data_blob:message_data.1});
-                    }
-                    Err(e) => {
-                        error!("json serialize error {}", e.to_string());
-                        respond_404(responder);
-                        return;
-                    }
-                }
-            } else {
-                respond_404(responder);
-            }
-        };
-        let tokio_runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(20).enable_io().enable_time().build().unwrap();
+        let webview = create_web_view(&window, proxy, backend_js_files, &src_dir, &package, init_script);
         
-        let fil_handler = move |request: Request<Vec<u8>>, responder:RequestAsyncResponder| {
-            let rpath = request.uri().path().to_string();
-            trace!("backend fil: request {}", rpath);
-            let fpath = rpath.substring(1, rpath.len()).to_string();
-            let file:PathBuf;
-            if fpath.starts_with("/") {
-                file = PathBuf::from(fpath.clone());
-            } else {
-                file = src_dir.join(fpath.clone());
-            } 
-            trace!("trying load file {}", file.clone().as_mut_os_str().to_str().unwrap());
-            handle_file_request(&tokio_runtime, is_module_request(request.uri().host()), fpath, file, &backend_js_files, responder);
-        };
-        let mut is_windows="false";
-        #[cfg(target_os = "windows")] {
-            is_windows = "true";
-        }
-
-        #[cfg(any(
-            target_os = "windows",
-            target_os = "macos",
-            target_os = "ios",
-            target_os = "android"
-        ))]
-        let builder = WebViewBuilder::new(&window);
-        
-        #[cfg(not(any(
-            target_os = "windows",
-            target_os = "macos",
-            target_os = "ios",
-            target_os = "android"
-        )))]
-        let builder = {
-            use tao::platform::unix::WindowExtUnix;
-            use wry::WebViewBuilderExtUnix;
-            let vbox = window.default_vbox().unwrap();
-            WebViewBuilder::new_gtk(vbox)
-        };
-
-        let webview = builder
-            .with_url("fil://file/backend.html")
-            .with_asynchronous_custom_protocol("fil".into(), fil_handler)
-            .with_asynchronous_custom_protocol("cmd".into(), cmd_handler)
-            .with_devtools(true)
-            .with_incognito(false)
-            .with_initialization_script(("window.__is_windows=".to_string()+is_windows+";"+init_script.as_str()).as_str())
-            .build().unwrap();
-          
-        #[cfg(debug_assertions)]
-        webview.open_devtools();
         Backend {
-            _window:window,
+            window:window,
             webview:webview,
+            webviews:HashMap::new(),
+            package:package,
+            src_dir:src_dir,
             command_sender,
             command_receiver,
             child_process: HashMap::new(),
@@ -389,11 +416,7 @@ impl Backend {
             error!("net_write_connection no sender for id {}", id);
         }
     }
-    pub fn get_data_blob(&mut self, id:String, blob_sender:Option<Sender<Vec<u8>>>) -> Option<Vec<u8>> {
-        if let Some(blob_sender) = blob_sender {
-            self.data_queue.blob_sender(id, blob_sender);
-            return None;
-        }
+    pub fn get_data_blob(&mut self, id:String) -> Option<Vec<u8>> {
         let data:Option<Vec<u8>>;
         if let Some(d) = self.data_queue.take(&id) {
             data = Some(d.to_vec());
@@ -402,7 +425,29 @@ impl Backend {
         };
         return data;
     }
-    
+    pub fn execute_sync(&mut self, proxy:EventLoopProxy<ElectricoEvents>, script:String, sender:Sender<(bool, Vec<u8>)>) {
+        let (backend_js_files, backendjs) = backend_resources(&self.package);
+        let init_script = format!("{}\nwindow.__electrico.loadMain();", backendjs);
+        let webview = create_web_view(&self.window, proxy, backend_js_files, &self.src_dir, &self.package, init_script);
+        let uuid = Uuid::new_v4().to_string();
+        let _ = webview.evaluate_script(format!("{script}.then(r=>{{$e_node.syncExecuteSyncResponse({{'uuid':'{uuid}', 'data':r+''}});}}).catch(e=>{{$e_node.syncExecuteSyncResponse({{'uuid':'{uuid}', 'error':e+''}});}});").as_str());
+        self.addon_state_insert(&uuid, sender);
+        self.webviews.insert(uuid, webview);
+    }
+    pub fn execute_sync_response(&mut self, uuid:String, data:Option<String>, error:Option<String>) {
+        self.webviews.remove(&uuid);
+        let sender:Option<&mut Sender<(bool, Vec<u8>)>> = self.addon_state_get_mut(&uuid);
+        if let Some(sender) = sender {
+            if let Some(data) = data {
+                let _ = sender.send((true, data.as_bytes().to_vec()));
+            } else if let Some(error) = error {
+                let _ = sender.send((false, error.as_bytes().to_vec()));
+            } else {
+                let _ = sender.send((false, "no vaild response".as_bytes().to_vec()));
+            }
+        }
+        self.addon_state_remove(&uuid);
+    }
     pub fn process_commands(&mut self) {
         if let Ok(command) = self.command_receiver.try_recv() {
             match command {
