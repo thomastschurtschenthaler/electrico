@@ -135,7 +135,6 @@
             if (e!=null) throw "decryptString error: "+e;
             r = Buffer.from(r).toString();
             if (r.trim().length==0) throw "decryptString error: no key";
-            console.log("decryptString", r);
             return r;
         },
     };
