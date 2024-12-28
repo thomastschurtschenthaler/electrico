@@ -33,7 +33,7 @@
                     });
                 },
                 write: (data) => {
-                    let {r, e} = $e_node.syncApi_Childprocess_StdinWrite({pid: id}, data);
+                    let {r, e} = $e_node.syncApi_Childprocess_StdinWrite({pid: id, end:false}, data);
                     if (e!=null) {
                         throw "ptyProcess.write error: "+e;
                     }
