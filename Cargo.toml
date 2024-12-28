@@ -1,6 +1,6 @@
 [package]
 name = "electrico"
-version = "0.5.0"
+version = "0.7.0"
 edition = "2021"
 authors = ["Thomas Tschurtschenthaler"]
 license = "MIT OR Apache-2.0"
@@ -27,7 +27,7 @@ serde_json = { version = "1.0.128"}
 json_comments = {version = "0.2.2"}
 serde = {version = "1.0.210"}
 rfd = {version="0.15.0"}
-tokio = {version = "1.40.0", features = ["full"]}
+tokio = {version = "1.42.0", features = ["full"]}
 reqwest = {version = "0.12.8"}
 substring = {version = "1.4.5"}
 open = {version = "5.3.0"}
@@ -46,6 +46,9 @@ clap = { version = "4.5.20", features = ["derive"] }
 tempfile = {version = "3.13.0"}
 spdlog-rs = {version = "0.4.0"}
 portable-pty = {version = "0.8.1"}
+hyper = {version = "1.5.2", features = ["full"] }
+hyper-util = {version = "0.1.10", features = ["full"]}
+http-body-util = {version = "0.1.2"}
 
 [target."cfg(any(target_os = \"linux\", target_os = \"dragonfly\", target_os = \"freebsd\", target_os = \"openbsd\", target_os = \"netbsd\"))".dependencies]
 webkit2gtk = { version = "=2.0.1", features = [ "v2_40" ]}

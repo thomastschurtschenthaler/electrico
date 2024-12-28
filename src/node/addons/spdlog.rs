@@ -3,14 +3,14 @@ use spdlog::{critical, debug, error, info, sink::{FileSink, Sink}, trace, warn, 
 use tao::event_loop::EventLoopProxy;
 use tokio::runtime::Runtime;
 use wry::RequestAsyncResponder;
-use crate::{backend::Backend, common::{respond_404, respond_ok}, node::node::AppEnv, types::ElectricoEvents};
+use crate::{backend::Backend, common::{respond_404, respond_ok}, node::node::AppEnv, types::{ElectricoEvents, Responder}};
 use super::types::SPDLogCommand;
 
 pub fn process_spdlog_command(_tokio_runtime:&Runtime, _app_env:&AppEnv,
     _proxy:EventLoopProxy<ElectricoEvents>,
     backend:&mut Backend,
     command:SPDLogCommand,
-    responder:RequestAsyncResponder,
+    responder:Responder,
     _data_blob:Option<Vec<u8>>)  {
     
     match command {

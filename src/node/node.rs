@@ -1,11 +1,11 @@
-use std::{collections::HashMap, env, path::PathBuf, sync::mpsc::{self, Receiver, Sender}, time::{Duration, SystemTime}};
+use std::{collections::HashMap, env, sync::mpsc::{self, Receiver, Sender}};
 use log::{debug, error, info, trace, warn};
 use reqwest::StatusCode;
 use tao::event_loop::EventLoopProxy;
 use tokio::runtime::Runtime;
-use wry::{webview_version, RequestAsyncResponder};
+use wry::webview_version;
 
-use crate::{backend::Backend, common::{respond_404, respond_client_error, respond_ok, respond_status, CONTENT_TYPE_BIN, CONTENT_TYPE_JSON, CONTENT_TYPE_TEXT}, node::types::{Process, ProcessVersions}, types::ElectricoEvents};
+use crate::{backend::Backend, common::{respond_404, respond_client_error, respond_ok, respond_status, CONTENT_TYPE_BIN, CONTENT_TYPE_JSON, CONTENT_TYPE_TEXT}, node::types::{Process, ProcessVersions}, types::{ElectricoEvents, Responder}};
 use super::{apis, addons, types::{ConsoleLogLevel, NodeCommand}};
 
 pub struct AppEnv {
@@ -36,7 +36,7 @@ pub fn process_node_command(tokio_runtime:&Runtime, app_env:&AppEnv,
         proxy:EventLoopProxy<ElectricoEvents>,
         backend:&mut Backend,
         command:NodeCommand,
-        responder:RequestAsyncResponder,
+        responder:Responder,
         data_blob:Option<Vec<u8>>)  {
     match command {
         NodeCommand::ConsoleLog { params } => {
@@ -61,61 +61,10 @@ pub fn process_node_command(tokio_runtime:&Runtime, app_env:&AppEnv,
         },
         NodeCommand::GetProcessInfo => {
             trace!("node process_info");
-            const ELECTRICO_VERSION: &str = env!("CARGO_PKG_VERSION");
-            let webview_version:String = webview_version().expect("webview_version failed");
-
-            let chrome = format!("WebView-{}", webview_version);
-            let node = format!("Electrico-{}/{}", ELECTRICO_VERSION, webview_version);
-            let electron = format!("Electrico-{}", ELECTRICO_VERSION);
-
-            let mut platform = "win32";
-            #[cfg(target_os = "macos")] {
-                platform = "darwin";
-            }
-            #[cfg(target_os = "linux")] {
-                platform = "linux";
-            }
-            let mut node_env="production".to_string();
-            let mut electron_is_dev="0".to_string();
-
-            let mut home = "".to_string();
-            if let Some(user_dirs) = directories::UserDirs::new() {
-                home = user_dirs.home_dir().as_os_str().to_str().unwrap().to_string();
-            }
-
-            #[cfg(debug_assertions)] {
-                node_env="development".to_string();
-                electron_is_dev="1".to_string();
-            }
-            let mut exec_path = "".to_string();
-            if let Ok(p) = std::env::current_exe() {
-                exec_path = p.as_os_str().to_str().unwrap().to_string();
-            }
-            let mut env:HashMap<String, String> = HashMap::new();
-            /*for (k, v) in env::vars() {
-                env.insert(k, v);
-            }*/
-            env.insert("NODE_ENV".to_string(), node_env);
-            env.insert("ELECTRON_IS_DEV".to_string(), electron_is_dev);
-            env.insert("HOME".to_string(), env::var("HOME").unwrap());
-            env.insert("PATH".to_string(), env::var("PATH").unwrap());
-            env.insert("SHELL".to_string(), env::var("SHELL").unwrap());
-
-            let process_info = Process::new(platform.to_string(), 
-                ProcessVersions::new(node, chrome, electron), 
-                env,
-                app_env.resources_path.clone(),
-                exec_path,
-                app_env.start_args.clone(),
-                std::process::id()
-            );
-            match serde_json::to_string(&process_info) {
-                Ok(json) => {
-                    respond_status(StatusCode::OK, CONTENT_TYPE_JSON.to_string(), json.into_bytes(), responder);
-                },
-                Err(e) => {
-                    respond_status(StatusCode::INTERNAL_SERVER_ERROR, CONTENT_TYPE_TEXT.to_string(), format!("GetProcessInfo json serialization error: {}", e).into_bytes(), responder);
-                }
+            if let Some(json) = process_info(app_env) {
+                respond_status(StatusCode::OK, CONTENT_TYPE_JSON.to_string(), json.into_bytes(), responder);
+            } else {
+                respond_status(StatusCode::INTERNAL_SERVER_ERROR, CONTENT_TYPE_TEXT.to_string(), format!("GetProcessInfo error").into_bytes(), responder);
             }
         },
         NodeCommand::GetStartArgs => {
@@ -163,6 +112,64 @@ pub fn process_node_command(tokio_runtime:&Runtime, app_env:&AppEnv,
         },
         NodeCommand::Addon { data } => {
             addons::addons::process_command(tokio_runtime, app_env, proxy, backend, data, responder, data_blob); 
+        }
+    }
+}
+
+fn process_info(app_env:&AppEnv) -> Option<String> {
+    trace!("node process_info");
+    const ELECTRICO_VERSION: &str = env!("CARGO_PKG_VERSION");
+    let webview_version:String = webview_version().expect("webview_version failed");
+
+    let chrome = format!("WebView-{}", webview_version);
+    let node = format!("Electrico-{}/{}", ELECTRICO_VERSION, webview_version);
+    let electron = format!("Electrico-{}", ELECTRICO_VERSION);
+
+    let mut platform = "win32";
+    #[cfg(target_os = "macos")] {
+        platform = "darwin";
+    }
+    #[cfg(target_os = "linux")] {
+        platform = "linux";
+    }
+    let mut node_env="production".to_string();
+    let mut electron_is_dev="0".to_string();
+
+    let mut home = "".to_string();
+    if let Some(user_dirs) = directories::UserDirs::new() {
+        home = user_dirs.home_dir().as_os_str().to_str().unwrap().to_string();
+    }
+
+    #[cfg(debug_assertions)] {
+        node_env="development".to_string();
+        electron_is_dev="1".to_string();
+    }
+    let mut exec_path = "".to_string();
+    if let Ok(p) = std::env::current_exe() {
+        exec_path = p.as_os_str().to_str().unwrap().to_string();
+    }
+    let mut env:HashMap<String, String> = HashMap::new();
+    for (k, v) in env::vars() {
+        env.insert(k, v);
+    }
+    env.insert("NODE_ENV".to_string(), node_env);
+    env.insert("ELECTRON_IS_DEV".to_string(), electron_is_dev);
+
+    let process_info = Process::new(platform.to_string(), 
+        ProcessVersions::new(node, chrome, electron), 
+        env,
+        app_env.resources_path.clone(),
+        exec_path,
+        app_env.start_args.clone(),
+        std::process::id()
+    );
+    match serde_json::to_string(&process_info) {
+        Ok(json) => {
+            return Some(json);
+        },
+        Err(e) => {
+            error!("process_info json error: {e}");
+            return None;
         }
     }
 }

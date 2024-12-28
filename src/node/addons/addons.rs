@@ -4,16 +4,18 @@ use tao::event_loop::EventLoopProxy;
 use tokio::runtime::Runtime;
 use wry::RequestAsyncResponder;
 
-use crate::{backend::Backend, common::respond_404, node::node::AppEnv, types::ElectricoEvents};
+use crate::{backend::Backend, common::respond_404, node::node::AppEnv, types::{ElectricoEvents, Responder}};
 
 use super::{pty::process_pty_command, spdlog::process_spdlog_command, sqlite::process_sqllite_command, types::AddonCommand};
 
 pub fn process_command(tokio_runtime:&Runtime, app_env:&AppEnv,
-    proxy:EventLoopProxy<ElectricoEvents>,
-    backend:&mut Backend,
-    data:String,
-    responder:RequestAsyncResponder,
-    data_blob:Option<Vec<u8>>)  {
+        proxy:EventLoopProxy<ElectricoEvents>,
+        backend:&mut Backend,
+        data:String,
+        responder:Responder,
+        data_blob:Option<Vec<u8>>)  {
+    
+    //debug!("addons.process_command {}", data);
     let command:Result<AddonCommand, Error> = serde_json::from_str(data.as_str());
     match command {
         Ok(command) => {

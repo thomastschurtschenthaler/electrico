@@ -2,13 +2,13 @@ use std::collections::HashMap;
 
 use log::debug;
 use reqwest::StatusCode;
-use rusqlite::{params_from_iter, Connection};
+use rusqlite::{params_from_iter, Connection, Result};
 use tao::event_loop::EventLoopProxy;
 use tokio::runtime::Runtime;
 use uuid::Uuid;
 use wry::RequestAsyncResponder;
 
-use crate::{backend::Backend, common::{respond_ok, respond_status, CONTENT_TYPE_JSON, CONTENT_TYPE_TEXT}, node::node::AppEnv, types::ElectricoEvents};
+use crate::{backend::Backend, common::{respond_ok, respond_status, CONTENT_TYPE_JSON, CONTENT_TYPE_TEXT}, node::node::AppEnv, types::{ElectricoEvents, Responder}};
 
 use super::types::SQLiteCommand;
 
@@ -16,7 +16,7 @@ pub fn process_sqllite_command(_tokio_runtime:&Runtime, _app_env:&AppEnv,
     _proxy:EventLoopProxy<ElectricoEvents>,
     backend:&mut Backend,
     command:SQLiteCommand,
-    responder:RequestAsyncResponder,
+    responder:Responder,
     _data_blob:Option<Vec<u8>>)  {
     
     match command {

@@ -1,4 +1,4 @@
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(serde::Serialize, serde::Deserialize, Debug)]
 pub struct BrowserWindowLoadFileParamConfigWebPreferences {
   pub preload: Option<String>,
   #[serde(rename = "nodeIntegration")]
@@ -9,7 +9,7 @@ pub struct BrowserWindowLoadFileParamConfigWebPreferences {
   pub additional_arguments: Option<Vec<String>>
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(serde::Serialize, serde::Deserialize, Debug)]
 pub struct BrowserWindowLoadFileParamConfig {
   pub title: String,
   pub x: Option<i32>,
@@ -24,32 +24,32 @@ pub struct BrowserWindowLoadFileParamConfig {
   pub web_preferences: BrowserWindowLoadFileParamConfigWebPreferences
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(serde::Serialize, serde::Deserialize, Debug)]
 pub struct BrowserWindowCreateParam {
   pub id: String,
   pub config: BrowserWindowLoadFileParamConfig
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(serde::Serialize, serde::Deserialize, Debug)]
 pub struct BrowserWindowLoadFileParam {
   pub id: String,
   pub file: String,
   pub config: BrowserWindowLoadFileParamConfig
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(serde::Serialize, serde::Deserialize, Debug)]
 pub enum BrowserWindowDevToolsCall {
   Open,
   Close
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(serde::Serialize, serde::Deserialize, Debug)]
 pub struct BrowserWindowDevToolsParam {
   pub id: String,
   pub call: BrowserWindowDevToolsCall
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(serde::Serialize, serde::Deserialize, Debug)]
 pub struct Menu {
   pub id: String,
   pub label: Option<String>,
@@ -60,14 +60,14 @@ pub struct Menu {
   pub submenu: Option<Vec<Menu>>
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(serde::Serialize, serde::Deserialize, Debug)]
 pub struct AppMenu {
   pub id: String,
   pub label: Option<String>,
   pub submenu: Vec<Menu>,
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(serde::Serialize, serde::Deserialize, Debug)]
 pub struct Rectangle {
   pub x: i32,
   pub y: i32,
@@ -89,27 +89,27 @@ impl Display {
     Display { bounds }
   }
 }
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(serde::Serialize, serde::Deserialize, Debug)]
 #[serde(tag = "method")]
 pub enum BrowserWindowBoundsAction {
   Set {bounds: Rectangle},
   Get
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(serde::Serialize, serde::Deserialize, Debug)]
 #[serde(tag = "method")]
 pub enum BrowserWindowMaximizedAction {
   Set {maximized: bool},
   Get
 }
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(serde::Serialize, serde::Deserialize, Debug)]
 #[serde(tag = "method")]
 pub enum BrowserWindowMinimizedAction {
   Set {minimized: bool},
   Get
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(serde::Serialize, serde::Deserialize, Debug)]
 #[serde(tag = "command")]
 pub enum ElectronCommand {
     BrowserWindowCreate {params: BrowserWindowCreateParam},

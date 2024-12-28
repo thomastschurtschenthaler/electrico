@@ -1,13 +1,15 @@
-use std::{collections::HashMap, fs::{self, File}, path::{Path, PathBuf}, sync::mpsc::Sender};
+use std::{collections::HashMap, fs::{self, File}, path::{Path, PathBuf}, str::FromStr};
 
 use include_dir::{include_dir, Dir};
 use queues::{IsQueue, Queue};
 use reqwest::{header::{ACCESS_CONTROL_ALLOW_ORIGIN, CONTENT_TYPE}, StatusCode};
 use tokio::runtime::Runtime;
 use urlencoding::decode;
-use wry::{http::{Request, Response}, RequestAsyncResponder};
+use wry::http::{Request, Response};
 use log::{debug, info, trace, error};
 use std::io::Read;
+
+use crate::{ipcchannel::IPCResponse, types::Responder};
 
 pub const CONTENT_TYPE_TEXT: &str = "text/plain;charset=utf-8";
 pub const CONTENT_TYPE_HTML: &str = "text/html;charset=utf-8";
@@ -44,7 +46,7 @@ pub fn build_file_map(dir:&Dir) -> HashMap<String, Vec<u8>> {
     res
 }
 
-fn respond_not_found(module:bool, responder:RequestAsyncResponder) {
+fn respond_not_found(module:bool, responder:Responder) {
     if module {
         respond_status(StatusCode::MOVED_PERMANENTLY, CONTENT_TYPE_HTML.to_string(), "package".to_string().into_bytes(), responder);
     } else {
@@ -52,7 +54,7 @@ fn respond_not_found(module:bool, responder:RequestAsyncResponder) {
     }
 }
 
-pub fn handle_file_request(tokio_runtime:&Runtime, module:bool, path:String, full_path:PathBuf, resources:&HashMap<String, Vec<u8>>, responder:RequestAsyncResponder)  {
+pub fn handle_file_request(tokio_runtime:&Runtime, module:bool, path:String, full_path:PathBuf, resources:&HashMap<String, Vec<u8>>, responder:Responder)  {
     let resources_rt=resources.clone();
     tokio_runtime.spawn(
         async move {
@@ -141,40 +143,98 @@ pub fn get_message_data(request: &Request<Vec<u8>>) -> Option<(String, Option<Ve
     return Some((cmdmsg, data_blob));
 }
 
+pub fn get_message_data_http(query:Option<String>, request: Vec<u8>) -> Option<(String, Option<Vec<u8>>)> {
+    let cmdmsg:String;
+    let data_blob:Option<Vec<u8>>;
+    if let Some(queryenc) = query {
+        if let Ok(query) = decode(queryenc.as_str()) {
+            cmdmsg=query.to_string();
+            data_blob = Some(request);
+        } else {
+            error!("url decoder error");
+            return None;
+        }
+    } else {
+        let msgr =  String::from_utf8(request);
+        match msgr {
+            Ok(msg) => {
+                trace!("backend cmd request body {}", msg.as_str());
+                cmdmsg=msg;
+                data_blob=None;
+            },
+            Err(e) => {
+                error!("utf8 error {}", e);
+                return None;
+            }
+        }
+    }
+    return Some((cmdmsg, data_blob));
+}
+
 pub fn escape(s:&String) -> String {
     s.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n").replace("\r", "\\r")
 }
 
-pub fn respond_ok(responder:RequestAsyncResponder) {
-    responder.respond(Response::builder()
-        .status(StatusCode::OK)
-        .header(ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-        .header(CONTENT_TYPE, CONTENT_TYPE_HTML)
-        .body(Vec::from("OK".to_string().as_bytes())).unwrap())
+pub fn respond_ok(responder:Responder) {
+    let body = Vec::from("OK".to_string().as_bytes());
+    match responder {
+        Responder::CustomProtocol { responder } => {
+            responder.respond(Response::builder()
+                .status(StatusCode::OK)
+                .header(ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                .header(CONTENT_TYPE, CONTENT_TYPE_HTML)
+                .body(body).unwrap());
+        },
+        Responder::HttpProtocol { sender } => {
+            let _ = sender.send(IPCResponse::new(body, CONTENT_TYPE_HTML.to_string(),StatusCode::OK));
+        }
+    }
 }
 
-pub fn respond_404(responder:RequestAsyncResponder) {
-    responder.respond(Response::builder()
-        .status(StatusCode::NOT_FOUND)
-        .header(ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-        .header(CONTENT_TYPE, CONTENT_TYPE_HTML)
-        .body(Vec::from("404".to_string().as_bytes())).unwrap())
+pub fn respond_404(responder:Responder) {
+    let body = Vec::from("404".to_string().as_bytes());
+    match responder {
+        Responder::CustomProtocol { responder } => {
+            responder.respond(Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .header(ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                .header(CONTENT_TYPE, CONTENT_TYPE_HTML)
+                .body(body).unwrap());
+        },
+        Responder::HttpProtocol { sender } => {
+            let _ = sender.send(IPCResponse::new(body, CONTENT_TYPE_HTML.to_string(),StatusCode::NOT_FOUND));
+        }
+    }
 }
 
-pub fn respond_status(status:StatusCode, content_type: String, body:Vec<u8>, responder:RequestAsyncResponder) {
-    responder.respond(Response::builder()
-        .status(status)
-        .header(ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-        .header(CONTENT_TYPE, content_type)
-        .body(body).unwrap())
+pub fn respond_status(status:StatusCode, content_type: String, body:Vec<u8>, responder:Responder) {
+    match responder {
+        Responder::CustomProtocol { responder } => {
+            responder.respond(Response::builder()
+                .status(status)
+                .header(ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                .header(CONTENT_TYPE, content_type)
+                .body(body).unwrap());
+        },
+        Responder::HttpProtocol { sender } => {
+            let _ = sender.send(IPCResponse::new(body, content_type,StatusCode::from_str(status.as_str()).expect("StatusCode from_str failed")));
+        }
+    }
 }
 
-pub fn respond_client_error(error:String, responder:RequestAsyncResponder) {
-    responder.respond(Response::builder()
-        .status(StatusCode::BAD_REQUEST)
-        .header(ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-        .header(CONTENT_TYPE, CONTENT_TYPE_TEXT)
-        .body(Vec::from(error.as_bytes())).unwrap())
+pub fn respond_client_error(error:String, responder:Responder) {
+    match responder {
+        Responder::CustomProtocol { responder } => {
+            responder.respond(Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .header(ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                .header(CONTENT_TYPE, CONTENT_TYPE_TEXT)
+                .body(Vec::from(error.as_bytes())).unwrap());
+        },
+        Responder::HttpProtocol { sender } => {
+            let _ = sender.send(IPCResponse::new(Vec::from(error.as_bytes()), CONTENT_TYPE_TEXT.to_string(),StatusCode::BAD_REQUEST));
+        }
+    }
 }
 
 pub fn check_and_create_dir(dir:&Path) {

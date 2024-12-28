@@ -1,4 +1,4 @@
-use std::{any::Any, borrow::BorrowMut, collections::HashMap, fs::File, hash::{DefaultHasher, Hash, Hasher}, path::PathBuf, sync::mpsc::{self, Receiver, Sender}};
+use std::{any::Any, collections::HashMap, fs::File, hash::{DefaultHasher, Hash, Hasher}, path::PathBuf, sync::mpsc::{self, Receiver, Sender}};
 use muda::MenuId;
 use notify::{Event, RecommendedWatcher};
 use substring::Substring;
@@ -74,7 +74,7 @@ fn create_web_view (
             file = src_dir_fil.join(fpath.clone());
         } 
         trace!("trying load file {}", file.clone().as_mut_os_str().to_str().unwrap());
-        handle_file_request(&tokio_runtime, is_module_request(request.uri().host()), fpath, file, &backend_js_files, responder);
+        handle_file_request(&tokio_runtime, is_module_request(request.uri().host()), fpath, file, &backend_js_files, crate::types::Responder::CustomProtocol { responder });
     };
     let cmd_handler = move |request: Request<Vec<u8>>, responder:RequestAsyncResponder| {
         let path = request.uri().path().to_string();
@@ -85,24 +85,26 @@ fn create_web_view (
             let commandr:Result<Command, Error> = serde_json::from_str(message_data.0.as_str());
             match commandr {
                 Ok (command) => {
-                    let _ = proxy.send_event(ElectricoEvents::ExecuteCommand{command, responder, data_blob:message_data.1});
+                    let _ = proxy.send_event(ElectricoEvents::ExecuteCommand{command, responder:crate::types::Responder::CustomProtocol { responder: responder }, data_blob:message_data.1});
                 }
                 Err(e) => {
-                    error!("json serialize error {}", e.to_string());
-                    respond_404(responder);
+                    error!("json serialize error {}, {}", e.to_string(), message_data.0);
+                    respond_404(crate::types::Responder::CustomProtocol { responder });
                     return;
                 }
             }
         } else {
-            respond_404(responder);
+            respond_404(crate::types::Responder::CustomProtocol { responder });
         }
     };
     
     let mut hasher = DefaultHasher::new();
     format!("{}/{}", src_dir.as_os_str().to_str().unwrap(), package.main.to_string().as_str()).hash(&mut hasher);
     let hash = format!("{}", hasher.finish());
+    let main = package.main.clone();
+    let pid = std::process::id();
     let webview = builder
-        .with_url(format!("e{}://file/backend.html", hash))
+        .with_url(format!("e{hash}://file/{main}-{pid}"))
         .with_asynchronous_custom_protocol(format!("e{}", hash).into(), fil_handler)
         .with_asynchronous_custom_protocol("cmd".into(), cmd_handler)
         .with_devtools(true)
@@ -121,7 +123,8 @@ fn backend_resources (package:&Package) -> (HashMap<String, Vec<u8>>, String) {
     backendjs = append_js_scripts(backendjs, JS_DIR_SHARED, Some(".js"));
     const JS_DIR_BACKEND: Dir = include_dir!("src/js/backend");
     backendjs = append_js_scripts(backendjs, JS_DIR_BACKEND, Some("electrico.js"));
-    let backend_js_files = build_file_map(&JS_DIR_BACKEND);
+    let mut backend_js_files = build_file_map(&JS_DIR_BACKEND);
+    backend_js_files.remove("package.json");
     if let Some(fork) = &package.fork {
         backendjs = backendjs+format!("\nwindow.__electrico.init_fork('{}', '{}', '{}');", fork.0, fork.1, escape(&fork.2)).as_str();
     }
@@ -217,6 +220,10 @@ impl Backend {
             let _ = self.webview.evaluate_script(format!("window.__electrico.callAppOn('window-close');").as_str());
         }
     }
+    pub fn window_focus(&mut self, id:&String, focus:bool) {
+        let ev = if focus {"browser-window-focus"} else {"browser-window-blur"};
+        let _ = self.webview.evaluate_script(format!("window.__electrico.callAppOn('{ev}', '{id}');").as_str());
+    }
     pub fn window_all_closed(&mut self) {
         let _ = self.webview.evaluate_script(format!("window.__electrico.callAppOn('window-all-closed');").as_str());
     }
@@ -226,16 +233,14 @@ impl Backend {
     pub fn dom_content_loaded(&mut self, id:&String) {
         let _ = self.webview.evaluate_script(format!("window.__electrico.domContentLoaded('{}');", id).as_str());
     }
-    pub fn child_process_callback(&mut self, pid:String, stream:String, data:Option<Vec<u8>>) {
+    pub fn child_process_callback(&mut self, pid:String, stream:String, end:bool, data:Option<Vec<u8>>) {
         if stream=="stdin" {
             if let Some(sender) = self.child_process.get(&pid) {
               trace!("ChildProcessData stdin {} {:?}", pid, data);
-              if let Some(data) = data {
-                let sender = sender.clone();
-                self.tokio_runtime.spawn(async move {
-                    let _ = sender.send(ChildProcess::StdinWrite {data}).await;
-                });
-              }
+            let sender = sender.clone();
+            self.tokio_runtime.spawn(async move {
+                let _ = sender.send(ChildProcess::StdinWrite {data, end}).await;
+            });
             }
         } else {
             trace!("child_process_callback {} {}", stream, pid);
@@ -249,7 +254,7 @@ impl Backend {
             let _ = self.webview.evaluate_script_with_callback(&format!("window.__electrico.call(()=>{{window.__electrico.child_process.callback.on_{}('{}');}});", stream, pid), move |r| {
                 if r.len()==0 {
                     trace!("child_process_callback not OK - resending");
-                    let _ = retry_sender.send(BackendCommand::ChildProcessCallback { pid:pid.clone(), stream:stream.clone(), data:None });
+                    let _ = retry_sender.send(BackendCommand::ChildProcessCallback { pid:pid.clone(), end, stream:stream.clone(), data:None });
                 }
             });
         }
@@ -454,9 +459,9 @@ impl Backend {
                 BackendCommand::IPCCall { browser_window_id, request_id, params } => {
                     self.call_ipc_channel(browser_window_id, request_id, params, None);
                 },
-                BackendCommand::ChildProcessCallback { pid, stream, data } => {
+                BackendCommand::ChildProcessCallback { pid, stream, end, data } => {
                     trace!("ChildProcessCallback");
-                    self.child_process_callback(pid, stream, data);
+                    self.child_process_callback(pid, stream, end, data);
                 },
                 BackendCommand::ChildProcessExit { pid, exit_code } => {
                     trace!("ChildProcessExit");

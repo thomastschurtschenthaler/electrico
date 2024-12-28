@@ -1,24 +1,22 @@
-use std::{io::{BufRead, BufReader}, process::{Command, Stdio}, time::Duration};
+use std::{fmt::Debug, io::{BufRead, BufReader}, process::{ChildStdin, Command, Stdio}, time::Duration};
 use log::{error, debug, trace};
 use reqwest::StatusCode;
 use tao::event_loop::EventLoopProxy;
 use tokio::{runtime::Runtime, sync::mpsc::{self, Receiver, Sender}, time::timeout};
 use std::io::Write;
-use wry::RequestAsyncResponder;
-use crate::{backend::Backend, common::{respond_client_error, respond_status, CONTENT_TYPE_TEXT}, node::common::send_command, types::{BackendCommand, ChildProcess, ElectricoEvents}};
+use crate::{backend::Backend, common::{respond_client_error, respond_status, CONTENT_TYPE_TEXT}, node::common::send_command, types::{BackendCommand, ChildProcess, ElectricoEvents, Responder}};
+
+use super::types::SpawnOptions;
 
 pub fn child_process_spawn(
     cmd_in:Option<String>, 
     args:Option<Vec<String>>,
+    options:Option<SpawnOptions>,
     backend:&mut Backend,
     tokio_runtime:&Runtime,
     proxy: EventLoopProxy<ElectricoEvents>, 
     command_sender: std::sync::mpsc::Sender<BackendCommand>,
-    responder:RequestAsyncResponder) {
-    let mut pargs:Vec<String> = Vec::new();
-    if let Some(args) = args {
-        pargs = args;
-    }
+    responder:Responder) {
     let cmd:String;
     if let Some(cmd_in) = cmd_in {
         cmd = cmd_in;
@@ -30,11 +28,24 @@ pub fn child_process_spawn(
             cmd = "powershell".to_string();
         }
     }
-    match Command::new(cmd)
-        .stdin(Stdio::piped())
+    let mut command = Command::new(cmd);
+    command.stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .args(pargs).spawn() {
+        .stderr(Stdio::piped());
+    if let Some(args) = args {
+        command.args(args);
+    }
+    if let Some(options) = options {
+        if let Some(cwd) = options.cwd {
+            command.current_dir(cwd);
+        }
+        if let Some(env) = options.env {
+            for (k, v) in env {
+                command.env(k, v);
+            }
+        }
+    }
+    match command.spawn() {
         Ok(mut child) => {
             let (sender, mut receiver): (Sender<ChildProcess>, Receiver<ChildProcess>) = mpsc::channel(100);
             backend.child_process_start(&child.id().to_string(), sender.clone());
@@ -43,7 +54,7 @@ pub fn child_process_spawn(
                 async move {
                     let stdout;
                     let stderr;
-                    let mut stdin;
+                    
                     match child.stdout.take() {
                         Some(chstdout) => {
                             stdout=chstdout;
@@ -64,16 +75,7 @@ pub fn child_process_spawn(
                             return;
                         }
                     }
-                    match child.stdin.take() {
-                        Some(chstdin) => {
-                            stdin=chstdin;
-                        }, 
-                        None => {
-                            error!("ChildProcessSpawn stdid not available");
-                            let _ = send_command(&proxy, &command_sender, BackendCommand::ChildProcessExit {pid:child.id().to_string(), exit_code:None});
-                            return;
-                        }
-                    }
+                    
                     let blen = 65536;
                     let mut exit_code:Option<i32> = None;
                     let mut disconnected = false;
@@ -111,7 +113,7 @@ pub fn child_process_spawn(
                     let stdout_command_sender = command_sender.clone();
                     let (stdout_end_sender, mut stdout_end_receiver): (Sender<ChildProcess>, Receiver<ChildProcess>) = mpsc::channel(100);
                     fn send_data(pid:&String, stream:String, buffer:Vec<u8>, proxy: &EventLoopProxy<ElectricoEvents>, sender:&std::sync::mpsc::Sender<BackendCommand>) {
-                        let _ = send_command(proxy, sender, BackendCommand::ChildProcessCallback { pid:pid.clone(), stream:stream, data:Some(buffer) });
+                        let _ = send_command(proxy, sender, BackendCommand::ChildProcessCallback { pid:pid.clone(), stream:stream, end:false, data:Some(buffer) });
                     }
                     tokio::spawn(async move {
                         trace!("starting stdout {}", chid);
@@ -140,52 +142,119 @@ pub fn child_process_spawn(
                     tokio::spawn(async move {
                         let mut stdout_end=false;
                         let mut stderr_end=false;
-                        loop {
-                            if let Ok(cp) = timeout(Duration::from_secs(1), receiver.recv()).await {
-                                if let Some(cp) = cp {
-                                    match cp {
-                                        ChildProcess::StdinWrite { data } => {
-                                            trace!("writing stdin {}", data.len());
-                                            let _ = stdin.write_all(data.as_slice());
-                                        },
-                                        ChildProcess::Disconnect => {
-                                            let _ = stdout_end_sender.send(ChildProcess::Disconnect).await;
-                                            let _ = stderr_end_sender.send(ChildProcess::Disconnect).await;
-                                            disconnected = true;
+                        {
+                            let mut stdin:ChildStdin;
+                            match child.stdin.take() {
+                                Some(chstdin) => {
+                                    stdin=chstdin;
+                                }, 
+                                None => {
+                                    error!("ChildProcessSpawn stdid not available");
+                                    let _ = send_command(&proxy, &command_sender, BackendCommand::ChildProcessExit {pid:child.id().to_string(), exit_code:None});
+                                    return;
+                                }
+                            }
+                            loop {
+                                if let Ok(cp) = timeout(Duration::from_secs(1), receiver.recv()).await {
+                                    if let Some(cp) = cp {
+                                        match cp {
+                                            ChildProcess::StdinWrite { data , end} => {
+                                                if let Some(data) = data {
+                                                    trace!("writing stdin {}", data.len());
+                                                    let _ = stdin.write_all(data.as_slice());
+                                                }
+                                                if end {
+                                                    let _ = stdin.flush();
+                                                    break;
+                                                }
+                                            },
+                                            ChildProcess::Disconnect => {
+                                                let _ = stdout_end_sender.send(ChildProcess::Disconnect).await;
+                                                let _ = stderr_end_sender.send(ChildProcess::Disconnect).await;
+                                                disconnected = true;
+                                                break;
+                                            },
+                                            ChildProcess::Kill => {
+                                                let _ = stdout_end_sender.send(ChildProcess::Disconnect).await;
+                                                let _ = stderr_end_sender.send(ChildProcess::Disconnect).await;
+                                                disconnected = true;
+                                                let _ = child.kill();
+                                            },
+                                            ChildProcess::StderrEnd => {
+                                                stdout_end=true;
+                                            },
+                                            ChildProcess::StdoutEnd => {
+                                                stderr_end=true;
+                                            }
+                                        }
+                                    }
+                                    match child.try_wait() {
+                                        Ok(event) => {
+                                            if let Some(event) = event {
+                                                exit_code = event.code();
+                                            }
+                                        }
+                                        Err(e) => {
+                                            error!("ChildProcessSpawn try_wait error: {}", e);
                                             break;
-                                        },
-                                        ChildProcess::Kill => {
-                                            let _ = stdout_end_sender.send(ChildProcess::Disconnect).await;
-                                            let _ = stderr_end_sender.send(ChildProcess::Disconnect).await;
-                                            disconnected = true;
-                                            let _ = child.kill();
-                                        },
-                                        ChildProcess::StderrEnd => {
-                                            stdout_end=true;
-                                        },
-                                        ChildProcess::StdoutEnd => {
-                                            stderr_end=true;
                                         }
                                     }
-                                }
-                                match child.try_wait() {
-                                    Ok(event) => {
-                                        if let Some(event) = event {
-                                            exit_code = event.code();
+                                    if let Some(_exit_code) = exit_code {
+                                        if stdout_end && stderr_end{
+                                            break;
                                         }
                                     }
-                                    Err(e) => {
-                                        error!("ChildProcessSpawn try_wait error: {}", e);
+                                    if disconnected {
                                         break;
                                     }
                                 }
-                                if let Some(_exit_code) = exit_code {
-                                    if stdout_end && stderr_end{
+                            }
+                        }
+                        if !disconnected && exit_code==None {
+                            loop {
+                                if let Ok(cp) = timeout(Duration::from_secs(1), receiver.recv()).await {
+                                    if let Some(cp) = cp {
+                                        match cp {
+                                            ChildProcess::Disconnect => {
+                                                let _ = stdout_end_sender.send(ChildProcess::Disconnect).await;
+                                                let _ = stderr_end_sender.send(ChildProcess::Disconnect).await;
+                                                disconnected = true;
+                                                break;
+                                            },
+                                            ChildProcess::Kill => {
+                                                let _ = stdout_end_sender.send(ChildProcess::Disconnect).await;
+                                                let _ = stderr_end_sender.send(ChildProcess::Disconnect).await;
+                                                disconnected = true;
+                                                let _ = child.kill();
+                                            },
+                                            ChildProcess::StderrEnd => {
+                                                stdout_end=true;
+                                            },
+                                            ChildProcess::StdoutEnd => {
+                                                stderr_end=true;
+                                            },
+                                            _ => ()
+                                        }
+                                    }
+                                    match child.try_wait() {
+                                        Ok(event) => {
+                                            if let Some(event) = event {
+                                                exit_code = event.code();
+                                            }
+                                        }
+                                        Err(e) => {
+                                            error!("ChildProcessSpawn try_wait error: {}", e);
+                                            break;
+                                        }
+                                    }
+                                    if let Some(_exit_code) = exit_code {
+                                        if stdout_end && stderr_end{
+                                            break;
+                                        }
+                                    }
+                                    if disconnected {
                                         break;
                                     }
-                                }
-                                if disconnected {
-                                    break;
                                 }
                             }
                         }

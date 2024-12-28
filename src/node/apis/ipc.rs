@@ -6,16 +6,15 @@ use tao::event_loop::EventLoopProxy;
 use tokio::{io::{AsyncBufReadExt, AsyncWriteExt, BufReader}, runtime::Runtime, sync::mpsc::{self, Receiver, Sender}, time::{sleep, timeout}};
 use log::{debug, error, trace};
 use uuid::Uuid;
-use wry::RequestAsyncResponder;
 
-use crate::{common::{respond_404, respond_ok, respond_status, CONTENT_TYPE_TEXT}, node::common::send_command, types::{BackendCommand, ElectricoEvents, NETConnection, NETServer}};
+use crate::{common::{respond_404, respond_ok, respond_status, CONTENT_TYPE_TEXT}, node::common::send_command, types::{BackendCommand, ElectricoEvents, NETConnection, NETServer, Responder}};
 
 pub fn ipc_server(
         hook:String, 
         tokio_runtime:&Runtime, 
         proxy: EventLoopProxy<ElectricoEvents>, 
         command_sender: std::sync::mpsc::Sender<BackendCommand>,
-        responder:RequestAsyncResponder) {
+        responder:Responder) {
     if let Ok(name) = hook.clone().to_fs_name::<GenericFilePath>() {
         let lo = ListenerOptions::new().name(name);
         let s_hook = hook.clone();
@@ -82,7 +81,7 @@ pub fn ipc_connection(
         tokio_runtime:&Runtime, 
         proxy: EventLoopProxy<ElectricoEvents>, 
         command_sender: std::sync::mpsc::Sender<BackendCommand>,
-        responder:RequestAsyncResponder) {
+        responder:Responder) {
     if let Ok(name) = hook.clone().to_fs_name::<GenericFilePath>() {
         let c_proxy = proxy.clone();
         let c_command_sender = command_sender.clone();

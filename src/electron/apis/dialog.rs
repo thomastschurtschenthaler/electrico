@@ -4,9 +4,8 @@ use reqwest::StatusCode;
 use rfd::{MessageButtons, MessageLevel};
 use tao::event_loop::EventLoopProxy;
 use tokio::runtime::Runtime;
-use wry::{http::Response, RequestAsyncResponder};
 
-use crate::{backend::Backend, common::{respond_404, respond_ok, respond_status, CONTENT_TYPE_BIN, CONTENT_TYPE_JSON, CONTENT_TYPE_TEXT}, frontend::Frontend, node::{apis::types::FSDirent, common::send_command, node::AppEnv}, types::{BackendCommand, ElectricoEvents}};
+use crate::{backend::Backend, common::{respond_404, respond_ok, respond_status, CONTENT_TYPE_BIN, CONTENT_TYPE_JSON, CONTENT_TYPE_TEXT}, frontend::Frontend, node::{apis::types::FSDirent, common::send_command, node::AppEnv}, types::{BackendCommand, ElectricoEvents, Responder}};
 
 use super::types::DialogCommand;
 
@@ -15,7 +14,7 @@ pub fn process_dialog_command(tokio_runtime:&Runtime, _app_env:&AppEnv,
     backend:&mut Backend,
     frontend:&mut Frontend,
     command:DialogCommand,
-    responder:RequestAsyncResponder,
+    responder:Responder,
     data_blob:Option<Vec<u8>>)  {
     
     match command {

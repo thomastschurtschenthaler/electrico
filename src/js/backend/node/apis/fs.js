@@ -3,6 +3,7 @@
     let uuidv4 = window.__uuidv4;
     let decoder = new TextDecoder();
     let _fd=0;
+    let watched_files = {};
     let fs = {
         constants: {
             "F_OK": 1,
@@ -44,6 +45,7 @@
                         isFile: () => {
                             return !resp.isDirectory
                         },
+                        size: resp.size,
                         birthtime: resp.birthtime!=null?new Date(resp.birthtime.secs_since_epoch*1000):null,
                         mtime: resp.mtime!=null?new Date(resp.mtime.secs_since_epoch*1000):null
                     });
@@ -63,6 +65,7 @@
                 isFile: () => {
                     return !resp.isDirectory
                 },
+                size: resp.size,
                 birthtime: resp.birthtime!=null?new Date(resp.birthtime.secs_since_epoch*1000):null,
                 mtime: resp.mtime!=null?new Date(resp.mtime.secs_since_epoch*1000):null
             };
@@ -82,6 +85,14 @@
                 } else {
                     cb(false);
                 }
+            });
+        },
+        copyFile(src, dest, mode, cb) {
+            if (cb==null) {
+                cb=mode; mode=null;
+            }
+            $e_node.asyncApi_FS_CopyFile({"src":src, "dest":dest, mode:mode}).then((e, r)=>{
+                cb(e);
             });
         },
         mkdirSync(path, options) {
@@ -146,7 +157,7 @@
         readFileSync(path, options) {
             if (options!=null && typeof options != 'object') options = {encoding: options};
             let {r, e} = $e_node.syncApi_FS_ReadFileBin({"path":path, options:options});
-            if (e!=null) throw "readFileSync failed: "+path;
+            if (e!=null) throw {"message":"ENOENT", "code":"ENOENT", "path":path};
             if (options==null || options.encoding==null) {
                 return Buffer.from(r);
             }
@@ -160,7 +171,7 @@
             if (options!=null && typeof options != 'object') options = {encoding: options};
             $e_node.asyncApi_FS_ReadFileBin({"path":path, options:options}).then((e, r)=>{
                 if (e!==null) {
-                    cb(e);
+                    cb({"message":"ENOENT", "code":"ENOENT", "path":path});
                 } else {
                     if (options==null || options.encoding==null) {
                         cb(null, Buffer.from(r));
@@ -244,13 +255,16 @@
                 }
                 length = buffer.byteLength-offset;
             }
-            $e_node.asyncApi_FS_Read({"fd":fd, "offset":offset, "length":length, "position":position}).then((e, r)=>{
+            offset = offset || 0;
+            $e_node.asyncApi_FS_ReadBin({"fd":fd, "offset":offset, "length":length, "position":position}).then((e, r)=>{
                 if (e!==null) {
                     cb(e);
                 } else {
                     let br = Buffer.from(r);
-                    let bytesRead = Math.min(br.byteLength, buffer.byteLength);
-                    br.copy(buffer, 0, 0, bytesRead);
+                    let bytesRead = Math.min(br.byteLength, buffer.byteLength-offset);
+                    if (bytesRead>0) {
+                        br.copy(buffer, offset, 0, bytesRead);
+                    }
                     cb(null, bytesRead, buffer);
                 }
             });
@@ -358,6 +372,48 @@
             window.__electrico.fs_watcher[wid] = watcher;
             return watcher;
         },
+        watchFile(path, options, cb) {
+            let wid = uuidv4();
+            let {r, e} = $e_node.syncApi_FS_Watch({wid:wid, "path":path, options:options});
+            if (e!=null) {
+                console.log("watchFile error", e);
+                throw "fs.watch error: "+e;
+            }
+            class WatcherCls extends EventEmitter {
+                constructor() {
+                    super();
+                    let prev = null;
+                    try {
+                        prev = fs.lstatSync(path);
+                    } catch (e) {
+                    }
+                    this.on_event = (eventType, filename) => {
+                        fs.lstat(path, (e, r)=>{
+                            if (e==null) {
+                                if (cb!=null) {
+                                    cb(r, prev);
+                                    prev = r;
+                                }
+                            }
+                        });
+                    }
+                    this.unref = () => {
+                        $e_node.asyncApi_FS_WatchClose({wid:wid});
+                    }
+                }
+            }
+            let watcher = new WatcherCls();
+            window.__electrico.fs_watcher[wid] = watcher;
+            watched_files[path] = watcher;
+            return watcher;
+        },
+        unwatchFile(filename, listener) {
+            let watcher = watched_files[filename];
+            if (watcher!=null) {
+                watcher.unref();
+                delete watched_files[filename];
+            }
+        },
         promises: {
             stat: (path) => {
                 return new Promise((resolve, reject)=>{
@@ -402,20 +458,37 @@
                     resolve(fs.mkdirSync(path, options));
                 });
             },
-            rm: (path, options) => {
+            copyFile: (src, dest, mode) => {
                 return new Promise((resolve, reject)=>{
-                    resolve(fs.rm(path, options, (e) => {
+                    fs.copyFile(src, dest, mode, (e) => {
                         if (e!=null) {
                             reject(e);
                         } else {
                             resolve();
                         }
-                    }));
+                    });
+                });
+            },
+            rm: (path, options) => {
+                return new Promise((resolve, reject)=>{
+                    fs.rm(path, options, (e) => {
+                        if (e!=null) {
+                            reject(e);
+                        } else {
+                            resolve();
+                        }
+                    });
                 });
             },
             readFile: (path, options) => {
                 return new Promise((resolve, reject)=>{
-                    resolve(fs.readFileSync(path, options));
+                    fs.readFile(path, options, (e, r) => {
+                        if (e!=null) {
+                            reject(e);
+                        } else {
+                            resolve(r);
+                        }
+                    });
                 });
             },
             unlink: (path) => {
@@ -430,6 +503,8 @@
             }
         }
     };
+    fs.statSync=fs.lstatSync;
+    fs.stat=fs.lstat;
     window.__electrico.libs["node:fs"] = fs;
     window.__electrico.libs["original-fs"] = fs;
     window.__electrico.libs.fs = fs;

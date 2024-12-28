@@ -4,19 +4,19 @@ use muda::Menu;
 use reqwest::StatusCode;
 use tao::event_loop::{EventLoopProxy, EventLoopWindowTarget};
 use tokio::{runtime::Runtime, time::sleep};
-use wry::RequestAsyncResponder;
 
-use crate::{backend::Backend, common::{check_and_create_dir, respond_404, respond_ok, respond_status, CONTENT_TYPE_JSON, CONTENT_TYPE_TEXT}, electron::types::BrowserWindowDevToolsCall, frontend::Frontend, node::node::AppEnv, types::{ElectricoEvents, Package}};
+use crate::{backend::Backend, common::{check_and_create_dir, respond_404, respond_ok, respond_status, CONTENT_TYPE_JSON, CONTENT_TYPE_TEXT}, electron::types::BrowserWindowDevToolsCall, frontend::Frontend, ipcchannel::IPCChannel, node::node::AppEnv, types::{ElectricoEvents, Package, Responder}};
 use super::{apis::apis::process_command, menu::create_menu, types::{BrowserWindowBoundsAction, BrowserWindowMaximizedAction, BrowserWindowMinimizedAction, ElectronCommand}};
 
 pub fn process_electron_command(tokio_runtime:&Runtime, event_loop:&EventLoopWindowTarget<ElectricoEvents>, proxy:EventLoopProxy<ElectricoEvents>,
     app_env:&mut AppEnv, rsrc_dir:&PathBuf, package:&Package,
-    frontend:&mut Frontend, backend:&mut Backend, command:ElectronCommand,responder:RequestAsyncResponder, data_blob:Option<Vec<u8>>) -> Option<Menu> {
+    frontend:&mut Frontend, backend:&mut Backend, ipc_channel:&mut IPCChannel,
+    command:ElectronCommand,responder:Responder, data_blob:Option<Vec<u8>>) -> Option<Menu> {
     let mut menu_ret: Option<Menu> = None;
     match command {
         ElectronCommand::BrowserWindowCreate { params } => {
             trace!("BrowserWindowCreate {}", params.id);
-            frontend.create_window(params.id.clone(), event_loop, proxy, params);
+            frontend.create_window( params.id.clone(), event_loop, proxy, params);
             respond_ok(responder);
         },
         ElectronCommand::BrowserWindowLoadfile { params } => {

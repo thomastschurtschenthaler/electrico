@@ -2,9 +2,8 @@ use log::{error, debug, trace};
 use reqwest::StatusCode;
 use tao::event_loop::EventLoopProxy;
 use tokio::runtime::Runtime;
-use wry::RequestAsyncResponder;
 
-use crate::{backend::Backend, common::{respond_ok, respond_status, CONTENT_TYPE_TEXT}, node::{apis::ipc::{ipc_connection, ipc_server}, node::AppEnv}, types::ElectricoEvents};
+use crate::{backend::Backend, common::{respond_ok, respond_status, CONTENT_TYPE_TEXT}, node::{apis::ipc::{ipc_connection, ipc_server}, node::AppEnv}, types::{ElectricoEvents, Responder}};
 
 use super::types::NETCommand;
 
@@ -12,7 +11,7 @@ pub fn process_net_command(tokio_runtime:&Runtime, _app_env:&AppEnv,
     proxy:EventLoopProxy<ElectricoEvents>,
     backend:&mut Backend,
     command:NETCommand,
-    responder:RequestAsyncResponder,
+    responder:Responder,
     data_blob:Option<Vec<u8>>)  {
     
     let command_sender = backend.command_sender();

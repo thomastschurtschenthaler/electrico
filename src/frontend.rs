@@ -1,26 +1,43 @@
-use log::{debug, error, trace, warn};
+use std::net::{IpAddr, SocketAddr};
+use std::thread;
+use std::time::Duration;
+use http_body_util::{BodyExt, Full};
+use hyper::body::Bytes;
+use hyper::header::ACCESS_CONTROL_ALLOW_ORIGIN;
+use hyper::server::conn::http1;
+use hyper::service::service_fn;
+use hyper::{Method, Request, Response};
+use hyper_util::rt::TokioIo;
+use tokio::net::{TcpListener, TcpStream};
+use log::{debug, error, info, trace, warn};
 use include_dir::{include_dir, Dir};
 use reqwest::StatusCode;
 use substring::Substring;
+use std::sync::mpsc::{self, Receiver, Sender};
 use uuid::Uuid;
 use std::{collections::HashMap, fs, path::PathBuf};
 use tao::{dpi::{LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize}, event_loop::{EventLoopProxy, EventLoopWindowTarget}, window::{Icon, Window, WindowBuilder, WindowId}};
 use serde_json::Error;
-use wry::{http::Request, RequestAsyncResponder, WebView, WebViewBuilder};
-use crate::{common::{append_js_scripts, escape, get_message_data, is_module_request, respond_404, respond_status, DataQueue, CONTENT_TYPE_TEXT, JS_DIR_FRONTEND}, electron::types::{BrowserWindowCreateParam, Rectangle}, types::{Command, ElectricoEvents, FrontendCommand}};
+use std::net::ToSocketAddrs;
+use wry::{WebView, WebViewBuilder};
+use crate::common::get_message_data_http;
+use crate::ipcchannel::IPCResponse;
+use crate::{common::{append_js_scripts, escape, DataQueue, CONTENT_TYPE_TEXT, JS_DIR_FRONTEND}, electron::types::{BrowserWindowCreateParam, Rectangle}, types::{Command, ElectricoEvents, FrontendCommand}};
 
 pub struct FrontendWindow {
     window:Window,
     webview:WebView,
     id:WindowId,
-    client_path_base:Option<PathBuf>
+    http_id: String,
+    client_path_base:Option<PathBuf>,
 }
 impl FrontendWindow {
-    pub fn new(window:Window, webview:WebView, id:WindowId) -> FrontendWindow {
+    pub fn new(window:Window, webview:WebView, id:WindowId, http_id:String) -> FrontendWindow {
         FrontendWindow {
             window:window,
             webview:webview,
             id:id,
+            http_id,
             client_path_base:None
         }
     }
@@ -29,14 +46,27 @@ impl FrontendWindow {
     }
 }
 
+fn http_port(port:&Option<u16>) ->u16 {
+    let http_port:u16;
+    if let Some(port) = port {
+        http_port = port.clone();
+    } else {
+        panic!("no http server");
+    }
+    return http_port;
+}
+
 pub struct Frontend {
     window_ids:HashMap<WindowId, String>,
     windows:HashMap<String, FrontendWindow>,
+    window_http_ids:HashMap<String, String>,
     opened_windows:usize,
     frontendalljs:String,
     rsrc_dir:PathBuf,
     data_queue:DataQueue,
-    file_protocols:Vec<String>,
+    http_port_start:u16,
+    http_port:Option<u16>,
+    file_protocols:Vec<String>
 }
 impl Frontend {
     pub fn new(rsrc_dir:PathBuf) -> Frontend {
@@ -47,17 +77,146 @@ impl Frontend {
         Frontend {
             window_ids:HashMap::new(),
             windows:HashMap::new(),
+            window_http_ids:HashMap::new(),
             opened_windows:0,
             frontendalljs:frontendalljs,
             rsrc_dir:rsrc_dir,
-            file_protocols:Vec::new(),
-            data_queue:DataQueue::new()
+            data_queue:DataQueue::new(),
+            http_port_start:3000,
+            http_port:None,
+            file_protocols:Vec::new()
         }
     }
-    pub fn create_window<'a>(&mut self, id:String, event_loop:&EventLoopWindowTarget<ElectricoEvents>, proxy:EventLoopProxy<ElectricoEvents>, config_params:BrowserWindowCreateParam) {
-        fn handle_electrico_ipc(browser_window_id: &String, proxy: &EventLoopProxy<ElectricoEvents>, request: Request<Vec<u8>>, responder:RequestAsyncResponder) {
-            trace!("frontend ipc request {}", request.uri().path().to_string());
-            let message_data:Option<(String, Option<Vec<u8>>)> = get_message_data(&request);
+    
+    pub fn create_window(&mut self, id:String, event_loop:&EventLoopWindowTarget<ElectricoEvents>, proxy:EventLoopProxy<ElectricoEvents>, config_params:BrowserWindowCreateParam) {
+        fn find_tcp_port(http_port_start:u16) -> u16 {
+            for p in http_port_start..http_port_start+1000 {
+                let addr = SocketAddr::from(([127, 0, 0, 1], p));
+                if let Ok(_) = std::net::TcpListener::bind(addr) {
+                    return p;
+                }
+            }
+            panic!("create_tcp_listener - no free port");
+        }
+
+        #[tokio::main(flavor = "multi_thread", worker_threads = 30)]
+        async fn start_http_server(proxy:EventLoopProxy<ElectricoEvents>, port:u16, protocols:Vec<String>) {    
+            trace!("start_http_server");
+            let addr = SocketAddr::from(([127, 0, 0, 1], port));
+            let listener= TcpListener::bind(addr).await.expect("start_http_server - TcpListener failed");
+            loop {
+                let (stream, _) = listener.accept().await.expect("start_http_server listener.accept() failed");
+                let io = TokioIo::new(stream);
+                let s_proxy = proxy.clone();
+                let protocols = protocols.clone();
+                tokio::task::spawn(async move {
+                    let protocols = protocols.clone();
+                    let service = service_fn(move |request:Request<hyper::body::Incoming>| {
+                        let pparts:Vec<&str> = request.uri().path().split("/").collect();
+                        trace!("http server - got request: {}, {:?}", request.uri().to_string(), request.uri().authority());
+                        let mut urlparts:Option<(String, String, String, String)> = None;
+                        if let Some(host) = pparts.get(1) {
+                            let hparts:Vec<&str> = host.split("@").collect();
+                            if let Some(http_id_str) =  hparts.get(0) {
+                                let http_id = http_id_str.to_string();
+                                if let Some(protocol) =  hparts.get(1) {
+                                    if let Some(url_root) = pparts.get(2) {
+                                        let url = format!("/{}", pparts[3..pparts.len()].join("/"));
+                                        urlparts = Some((http_id, protocol.to_string(), url_root.to_string(), url));
+                                    }
+                                }
+                            }
+                        }
+                        let mut query:Option<String> = None;
+                        if let Some(q) = request.uri().query() {
+                            query = Some(q.to_string());
+                        } 
+                        let s2_proxy = s_proxy.clone();
+                        let (req_sender, req_receiver): (Sender<IPCResponse>, Receiver<IPCResponse>) = mpsc::channel();
+                        let protocols = protocols.clone();
+                        return async move {
+                            if let Some((http_id, protocol, url_root, url)) = urlparts {
+                                trace!("http_server processing request:{http_id}, {protocol}, {url_root}, {url}");
+                                let url2 = url.clone();
+                                if let Ok(body) = request.collect().await {
+                                    let data = body.to_bytes().to_vec();
+                                    if is_electrico_ipc(&url) {
+                                        trace!("http_server - electrico-ipc request:{url}");
+                                        handle_electrico_ipc(&http_id, &s2_proxy, url, query.clone(), data, req_sender);
+                                    } else {
+                                        if url_root == "electrico-mod" || protocol == "electrico-file" {
+                                            let module = url_root == "electrico-mod"; 
+                                            trace!("browser file protocol request {}; {}", url, module);
+                                            let _ = s2_proxy.send_event(ElectricoEvents::ExecuteCommand {command:Command::BrowserWindowReadFile {
+                                                http_id, 
+                                                file_path: module_file_path(url), 
+                                                module
+                                            }, responder:crate::types::Responder::HttpProtocol { sender:req_sender }, data_blob:None});
+                                        } else {
+                                            let mut path = url;
+                                            if let Some(query) = query.clone() {
+                                                path = format!("{path}?{query}");
+                                            }
+                                            trace!("custom file protocol request: {}, {}", protocol, path);
+                                            let _ = s2_proxy.send_event(ElectricoEvents::ExecuteCommand {command:Command::PostIPC {
+                                                http_id,
+                                                nonce:None,
+                                                request_id:Uuid::new_v4().to_string(),
+                                                params: format!("[\"__electrico_protocol\", \"{}\", \"{}\"]", escape(&protocol), path)
+                                            }, responder:crate::types::Responder::HttpProtocol { sender:req_sender}, data_blob:None});
+                                        }
+                                    }
+                                    if let Ok(r) = req_receiver.recv_timeout(Duration::from_secs(3)) {
+                                        trace!("http - request response: {}", r.params.len());
+                                        let mut r_body = r.params; 
+                                        if let Some(query)  = query {
+                                            if query.ends_with("electrico_hostpage=true") {
+                                                let mut host_page_html = String::from_utf8(r_body).expect("host page utf-8 failed");
+                                                for p in protocols {
+                                                    if let Some(_) = host_page_html.find(format!("{p}:").as_str()) {
+                                                        host_page_html = host_page_html.replace(format!("{p}:").as_str(), format!("*.localhost:{port}").as_str());
+                                                    }
+                                                }
+                                                r_body = host_page_html.as_bytes().to_vec();
+                                            }
+                                        }
+                                        return Ok::<_, Error>(Response::builder()
+                                            .header("Content-Type", r.mime_type)
+                                            .header(ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                                            .status(r.status)
+                                            .body(Full::new(Bytes::from(r_body))).expect("http body full failed"));
+                                    } else {
+                                        error!("http - request timed out:{url2}");
+                                    }
+                                }
+                            }
+                            error!("http - invalid http request");
+                            return Ok::<_, Error>(Response::builder().status(StatusCode::BAD_REQUEST).body(Full::new(Bytes::from(StatusCode::BAD_REQUEST.to_string()))).expect("http body full failed"));
+                        };
+                    });
+                    if let Err(err) = http1::Builder::new()
+                        .keep_alive(true)
+                        .serve_connection(io, service)
+                        .await
+                    {
+                        error!("Error serving connection: {:?}", err);
+                    }
+                });
+            }   
+        }
+        if self.http_port==None {
+            let port = find_tcp_port(self.http_port_start);
+            let s_proxy = proxy.clone();
+            let protocols = self.file_protocols.clone();
+            thread::spawn(move || {
+                start_http_server(s_proxy, port, protocols);
+            });
+            self.http_port=Some(port);
+        }
+
+        fn handle_electrico_ipc(http_id: &String, proxy: &EventLoopProxy<ElectricoEvents>, url:String, query:Option<String>, request: Vec<u8>, sender:Sender<IPCResponse>) {
+            trace!("frontend ipc request {}", url);
+            let message_data:Option<(String, Option<Vec<u8>>)> = get_message_data_http(query, request);
             if let Some(message_data) = message_data {
                 trace!("frontend ipc request action {}", message_data.0.as_str());
                 let commandr:Result<FrontendCommand, Error> = serde_json::from_str(message_data.0.as_str());
@@ -66,29 +225,22 @@ impl Frontend {
                         match command {
                             FrontendCommand::PostIPC {request_id, nonce, params } => {
                                 trace!("frontend ipc call {} {}", nonce, params);
-                                if &nonce!=browser_window_id {
-                                    error!("frontend ipc call nonce does not match - forbidden client-nonce:{} backend-nonce:{}", nonce, browser_window_id);
-                                    respond_status(StatusCode::FORBIDDEN, CONTENT_TYPE_TEXT.to_string(), "forbidden".to_string().into_bytes(), responder);
-                                    return;
-                                }
-                                let _ = proxy.send_event(ElectricoEvents::ExecuteCommand{command:Command::PostIPC {browser_window_id:browser_window_id.clone(), request_id, params}, responder, data_blob:message_data.1});
+                                let _ = proxy.send_event(ElectricoEvents::ExecuteCommand{command:Command::PostIPC {http_id:http_id.clone(), nonce:Some(nonce), request_id, params}, responder:crate::types::Responder::HttpProtocol { sender }, data_blob:message_data.1});
                             },
                             FrontendCommand::GetProcessInfo {nonce} => {
-                                if &nonce!=browser_window_id {
-                                    error!("frontend GetProcessInfo call nonce does not match - forbidden client-nonce:{} backend-nonce:{}", nonce, browser_window_id);
-                                    respond_status(StatusCode::FORBIDDEN, CONTENT_TYPE_TEXT.to_string(), "forbidden".to_string().into_bytes(), responder);
-                                    return;
-                                }
-                                let _ = proxy.send_event(ElectricoEvents::ExecuteCommand{command:Command::Node { invoke: crate::node::types::NodeCommand::GetProcessInfo }, responder, data_blob:None});
+                                let _ = proxy.send_event(ElectricoEvents::ExecuteCommand{command:Command::FrontendGetProcessInfo {http_id:http_id.clone(), nonce:nonce}, responder:crate::types::Responder::HttpProtocol { sender }, data_blob:None});
                             },
                             FrontendCommand::DOMContentLoaded {title } => {
-                                let _ = proxy.send_event(ElectricoEvents::ExecuteCommand{command:Command::DOMContentLoaded {browser_window_id:browser_window_id.clone(), title}, responder, data_blob:None});
+                                let _ = proxy.send_event(ElectricoEvents::ExecuteCommand{command:Command::DOMContentLoaded {http_id:http_id.clone(), title}, responder:crate::types::Responder::HttpProtocol { sender }, data_blob:None});
                             },
                             FrontendCommand::Alert {message } => {
-                                let _ = proxy.send_event(ElectricoEvents::ExecuteCommand{command:Command::Electron { invoke: crate::electron::types::ElectronCommand::Api { data: format!("{{\"api\":\"Dialog\", \"command\":{{\"action\":\"ShowMessageBoxSync\", \"options\":{{\"message\":\"{}\"}}}}}}", escape(&message)) } }, responder, data_blob:None});
+                                let _ = proxy.send_event(ElectricoEvents::ExecuteCommand{command:Command::Electron { invoke: crate::electron::types::ElectronCommand::Api { data: format!("{{\"api\":\"Dialog\", \"command\":{{\"action\":\"ShowMessageBoxSync\", \"options\":{{\"message\":\"{}\"}}}}}}", escape(&message)) } }, responder:crate::types::Responder::HttpProtocol { sender }, data_blob:None});
                             },
                             FrontendCommand::GetDataBlob { id } => {
-                                let _ = proxy.send_event(ElectricoEvents::ExecuteCommand{command:Command::FrontendGetDataBlob { id }, responder, data_blob:None});
+                                let _ = proxy.send_event(ElectricoEvents::ExecuteCommand{command:Command::FrontendGetDataBlob { id }, responder:crate::types::Responder::HttpProtocol { sender }, data_blob:None});
+                            },
+                            FrontendCommand::GetProtocols => {
+                                let _ = proxy.send_event(ElectricoEvents::ExecuteCommand{command:Command::FrontendGetProtocols, responder:crate::types::Responder::HttpProtocol { sender }, data_blob:None});
                             }
                         }
                     }
@@ -97,7 +249,7 @@ impl Frontend {
                     }
                 }
             } else {
-                respond_404(responder); 
+                let _ = sender.send(IPCResponse::new("data error".to_string().as_bytes().to_vec(), CONTENT_TYPE_TEXT.to_string(), StatusCode::BAD_GATEWAY));
             }
         }
         
@@ -108,7 +260,7 @@ impl Frontend {
         
         let window = WindowBuilder::new()
             .build(&event_loop)
-            .unwrap();
+            .expect("WindowBuilder::new failed");
    
        
         window.set_title(&config_params.config.title);
@@ -116,11 +268,11 @@ impl Frontend {
             window.set_visible(false);
         }
         window.set_resizable(config_params.config.resizable);
-        
+
         if let Some(x) = config_params.config.x {
             if let Some(y) = config_params.config.y {
                 let lpos = LogicalPosition::new(x, y);
-                let pos:PhysicalPosition<i32> = lpos.to_physical(window.current_monitor().unwrap().scale_factor());
+                let pos:PhysicalPosition<i32> = lpos.to_physical(window.current_monitor().expect("window.current_monitor() failed").scale_factor());
                 window.set_outer_position(pos);
             }
         }
@@ -218,74 +370,32 @@ impl Frontend {
         fn is_electrico_ipc(path:&String) -> bool {
             path.starts_with("/electrico-ipc")
         }
-        for schema in &self.file_protocols {
-            let fp_proxy = proxy.clone();
-            let fp_id = id.clone();
-            let fp_schema = schema.clone();
-            webview_builder = webview_builder.with_asynchronous_custom_protocol(
-                schema.into(), 
-                move |request: Request<Vec<u8>>, responder:RequestAsyncResponder| {
-                    let fpath = request.uri().path().to_string();
-                    if let Some(host) = request.uri().host() {
-                        if is_electrico_ipc(&fpath) {
-                            trace!("custom file prototcol electrico-ipc request");
-                            handle_electrico_ipc(&fp_id, &fp_proxy, request, responder);
-                        } else {
-                            if host == "electrico-mod" {
-                                trace!("custom file prototcol electrico-mod request {}", fpath);
-                                let _ = fp_proxy.send_event(ElectricoEvents::ExecuteCommand {command:Command::BrowserWindowReadFile {
-                                    browser_window_id:fp_id.clone(), 
-                                    file_path: module_file_path(fpath), 
-                                    module:true
-                                }, responder, data_blob:None});
-                            } else {
-                                trace!("custom file protocol request: {}, {}", fp_schema, fpath);
-                                /*let _ = fp_proxy.send_event(ElectricoEvents::ExecuteCommand {command:Command::BrowserWindowReadFile {
-                                    browser_window_id:fp_id.clone(), 
-                                    file_path: fpath, 
-                                    module:false
-                                }, responder, data_blob:None});*/
-                                let _ = fp_proxy.send_event(ElectricoEvents::ExecuteCommand {command:Command::PostIPC {
-                                    browser_window_id:fp_id.clone(),
-                                    request_id:Uuid::new_v4().to_string(),
-                                    params: format!("[\"__electrico_protocol\", \"{}\", \"{}\"]", fp_schema, fpath)
-                                }, responder, data_blob:None});
-                            }
-                        }
-                    } else {
-                        error!("custom file protocol - no host!");
-                    }
-            });
-        }
-        let fil_handler_id = id.clone();
-        let fil_handler_proxy = proxy.clone();
-        let fil_handler = move |request: Request<Vec<u8>>, responder:RequestAsyncResponder| {
-            let fpath = request.uri().path().to_string();
-            if is_electrico_ipc(&fpath) {
-                trace!("fil_handler electrico-ipc request");
-                handle_electrico_ipc(&fil_handler_id, &fil_handler_proxy, request, responder);
-            } else {
-                
-                trace!("frontend electrico-file: fpath {}", fpath);
-                let _ = fil_handler_proxy.send_event(ElectricoEvents::ExecuteCommand {command:Command::BrowserWindowReadFile {
-                    browser_window_id:fil_handler_id.clone(), 
-                    file_path: module_file_path(fpath), 
-                    module:is_module_request(request.uri().host())
-                }, responder, data_blob:None});
-            }
-        };
+        
+        let http_uid = Uuid::new_v4().to_string();
+        debug!("frontend create_window - http_uid:{http_uid}");
+        let http_port = http_port(&self.http_port);
+        let frontendalljs = self.frontendalljs.clone();
+        let init_script = format!("window.__http_protocol = {{'http_port':{http_port}, 'http_uid':'{http_uid}'}};
+                var __electrico_nonce='{id}'; 
+                window.__electrico_preload=function(document, ph){{\nph.before(__electrico_nonce); 
+                var window=document.window; var process=window.process; 
+                var require=document.window.require;\n{preload_script}\nph.after();\n}};\n
+                {frontendalljs}\n
+                __electrico_nonce='';\n");
         let webview = webview_builder
-            .with_asynchronous_custom_protocol("electrico-file".into(), fil_handler)
-            .with_initialization_script(("window.__is_windows=".to_string()+is_windows+";var __electrico_nonce='"+config_params.id.clone().as_str()+"'; window.__electrico_preload=function(document, ph){\nph.before(__electrico_nonce); var window=document.window; var process=window.process; var require=document.window.require;\n"+preload_script.as_str()+"\nph.after();\n};\n"+self.frontendalljs.as_str()+"\n__electrico_nonce='';\n").as_str())
+            .with_initialization_script(init_script.as_str())
             .with_navigation_handler(nav_handler)
+            //.with_proxy_config(wry::ProxyConfig::Http(wry::ProxyEndpoint { host: format!("127.0.0.1"), port: format!("{http_port}") }))
             .with_devtools(true)
+            .with_clipboard(true)
             .build().unwrap();
         #[cfg(debug_assertions)]
         webview.open_devtools();
         
         let w_id = window.id().clone();
+        self.window_http_ids.insert(http_uid.clone(), config_params.id.clone());
         self.window_ids.insert(window.id().clone(), config_params.id.clone());
-        let fwindow: FrontendWindow = FrontendWindow::new(window, webview, w_id);
+        let fwindow: FrontendWindow = FrontendWindow::new(window, webview, w_id, http_uid);
         self.windows.insert(config_params.id.clone(), fwindow);
         self.opened_windows+=1;
     }
@@ -302,11 +412,17 @@ impl Frontend {
                 if let None = fpath.find("://") {
                     url = "electrico-file://file/".to_string()+url.as_str();
                 }
-                #[cfg(target_os = "windows")] {
-                    if let Some(ix) = fpath.find("://") {
-                        url = format!("http://{}.{}", url.substring(0, ix), url.substring(ix+3, url.len()));
-                    }
+                let http_port = http_port(&self.http_port);
+                if let Some(ix) = url.find("://") {
+                    let protocol = url.substring(0, ix);
+                    url = format!("http://electrico.localhost:{http_port}/{}@{protocol}/{}", window.http_id, url.substring(ix+3, url.len()));
                 }
+                if let Some(_) = url.find("?") {
+                    url = url+"&electrico_hostpage=true";
+                } else {
+                    url = url+"?electrico_hostpage=true";
+                }
+                debug!("load_url url={}", url);
                 window.set_client_path_base(Some(self.rsrc_dir.clone()));
                 let _ = window.webview.load_url(url.as_str());
             }
@@ -488,6 +604,9 @@ impl Frontend {
         }
         None
     }
+    pub fn get_browser_window_id(&mut self, http_id:&String) -> Option<&String>  {
+        return self.window_http_ids.get(http_id);
+    }
     pub fn dom_content_loaded(&mut self, id:&String, title:String) {
         if let Some(window) = self.windows.get(id) {
             if title.len()>0 {
@@ -496,9 +615,11 @@ impl Frontend {
         } else {
             error!("set_title - frontend_webview not there - id: {}", id);
         }
-    } 
+    }
     pub fn register_file_protocol(&mut self, schema:String) {
         self.file_protocols.push(schema);
     }
-    
+    pub fn get_file_protocols(&self) -> &Vec<String> {
+        &self.file_protocols
+    }
 }

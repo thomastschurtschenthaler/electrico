@@ -1,6 +1,6 @@
 use std::{collections::HashMap, usize};
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(serde::Serialize, serde::Deserialize, Debug)]
 pub enum ConsoleLogLevel {
   Info,
   Debug,
@@ -9,7 +9,7 @@ pub enum ConsoleLogLevel {
   Trace
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(serde::Serialize, serde::Deserialize, Debug)]
 pub struct ConsoleLogParam {
   pub level: ConsoleLogLevel,
   pub logmsg: String,
@@ -24,7 +24,7 @@ pub struct FSOptions {
   pub with_file_types:  Option<bool>
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(serde::Serialize, serde::Deserialize, Debug)]
 #[serde(tag = "command")]
 pub enum NodeCommand {
   ConsoleLog {params: ConsoleLogParam},

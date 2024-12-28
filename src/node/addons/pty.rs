@@ -7,7 +7,7 @@ use tao::event_loop::EventLoopProxy;
 use tokio::{runtime::Runtime, sync::mpsc::{self, Receiver, Sender}, time::timeout};
 use wry::RequestAsyncResponder;
 
-use crate::{backend::Backend, common::{respond_404, respond_ok, respond_status, CONTENT_TYPE_TEXT}, node::{common::send_command, node::AppEnv}, types::{BackendCommand, ChildProcess, ElectricoEvents}};
+use crate::{backend::Backend, common::{respond_404, respond_ok, respond_status, CONTENT_TYPE_TEXT}, node::{common::send_command, node::AppEnv}, types::{BackendCommand, ChildProcess, ElectricoEvents, Responder}};
 
 use super::types::PTYCommand;
 
@@ -15,7 +15,7 @@ pub fn process_pty_command(tokio_runtime:&Runtime, _app_env:&AppEnv,
     proxy:EventLoopProxy<ElectricoEvents>,
     backend:&mut Backend,
     command:PTYCommand,
-    responder:RequestAsyncResponder,
+    responder:Responder,
     _data_blob:Option<Vec<u8>>)  {
     
     let command_sender = backend.command_sender();
@@ -81,7 +81,7 @@ pub fn process_pty_command(tokio_runtime:&Runtime, _app_env:&AppEnv,
                                                 trace!("PTYCommand bytes read {}", read);
                                                 if read>0 {
                                                     let data:Vec<u8> = stdout_buf[0..read].to_vec();
-                                                    let _ = send_command(&proxy, &command_sender, BackendCommand::ChildProcessCallback { pid:id.clone(), stream:"stdout".to_string(), data:Some(data) });
+                                                    let _ = send_command(&proxy, &command_sender, BackendCommand::ChildProcessCallback { pid:id.clone(), stream:"stdout".to_string(), end:false, data:Some(data) });
                                                 }
                                                 if let Ok(d) = read_end_receiver.try_recv() {
                                                     match d {
@@ -99,9 +99,11 @@ pub fn process_pty_command(tokio_runtime:&Runtime, _app_env:&AppEnv,
                                             if let Ok(cp) = timeout(Duration::from_millis(100), receiver.recv()).await {
                                                 if let Some(cp) = cp {
                                                     match cp {
-                                                        ChildProcess::StdinWrite { data } => {
-                                                            trace!("PTYCommand bytes write {}", data.len());
-                                                            let _ = writer.write(data.as_slice());
+                                                        ChildProcess::StdinWrite { data, end} => {
+                                                            if let Some(data) = data {
+                                                                trace!("PTYCommand bytes write {}", data.len());
+                                                                let _ = writer.write(data.as_slice());
+                                                            }
                                                         },
                                                         ChildProcess::Disconnect => {
                                                             let _ = read_end_sender.send(ChildProcess::Disconnect).await;

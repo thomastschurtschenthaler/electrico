@@ -1,4 +1,4 @@
-(function(){
+(function() {
     let http = {
         request(options, cb) {
             let req_events =  {};
@@ -44,6 +44,10 @@
             constructor(opts) {
                 console.log("http.Agent construct", opts);
             }
+        },
+        createServer: function(options, listener) {
+            let {createServer} = require("node:net");
+            return createServer(options, listener);
         }
     };
     window.__electrico.libs["node:https"] = http;

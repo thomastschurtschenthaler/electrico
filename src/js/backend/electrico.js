@@ -1,6 +1,6 @@
 var __electrico_nonce=null;
 (function() {
-    let wkeys = ['location', 'screen', '__is_windows', 'crypto', 'createWindow', 'setTimeout', 'setInterval', 'clearTimeout','clearInterval', 'fetch', '__init_shared', '__init_require', 'btoa', 'atob', 'performance'];
+    let wkeys = ['location', 'screen', '__is_windows', 'crypto', 'createWindow', 'setTimeout', 'setInterval', 'clearTimeout','clearInterval', 'fetch', '__init_shared', '__init_require', 'btoa', 'atob', 'performance', 'TextDecoder', 'TextEncoder'];
     for (let k in window) {
         if (!wkeys.includes(k)) {
             window[k]=()=>{};
@@ -36,6 +36,11 @@ var __electrico_nonce=null;
             _clearInterval(timer._timer);
         }
     }
+    window.setImmediate = function(cb) {
+        return setTimeout(cb, 0);
+    }
+    window.clearImmediate = window.clearTimeout;
+    
     window.__init_shared(window);
     function createCMDRequest(async, name) {
         const req = new XMLHttpRequest();
@@ -231,7 +236,10 @@ var __electrico_nonce=null;
                     window.__electrico.child_process[pid].stderr.emit("data", bdata);
                 },
                 on_close: (pid, exit_code) => {
+                    window.__electrico.child_process[pid].stdout.emit("close");
+                    window.__electrico.child_process[pid].stderr.emit("close");
                     window.__electrico.child_process[pid].emit("close", exit_code);
+                    window.__electrico.child_process[pid].emit("exit", exit_code);
                     setTimeout(()=>{
                         delete window.__electrico.child_process[pid];
                     }, 100);
@@ -280,7 +288,6 @@ var __electrico_nonce=null;
         },
         callback: {
             "BrowserWindowLoadfile": (id) => {
-                //console.trace("BrowserWindowLoadfile done", id);
                 let win = window.__electrico.browser_window[id]
                 let cb = win.webContents.on['did-finish-load'];
                 if (cb!=null) {
@@ -298,9 +305,14 @@ var __electrico_nonce=null;
             if (!main.startsWith("./")) {
                 main = "./"+main;
             }
-            //setTimeout(()=>{
-                require(main);
-            //}, 1000);
+            function doLoadMain() {
+                if (window.__electrico.mainIPCServer.initialized) {
+                    require(main);
+                } else {
+                    setTimeout(doLoadMain, 0);
+                }
+            }
+            doLoadMain();
         },
         callIPCChannel: (browserWindowID, requestID, argumentsstr) => {
             setTimeout(()=>{
@@ -360,7 +372,7 @@ var __electrico_nonce=null;
                 }
             } else {
                 const {app} = require('electron/main');
-                app.emit(event);
+                app.emit(event, event, window.__electrico.browser_window[windowID]);
             }
         },
         menuSelected: (menuid) => {
@@ -543,6 +555,7 @@ var __electrico_nonce=null;
     }
     window.__electrico.ProcessPort=ProcessPort;
     let init_fork = function(hook, clientid, envstr) {
+        window.__electrico.parent_connected=true;
         //console.log("init_fork", hook, clientid, envstr);
         let env = JSON.parse(envstr);
         for (let k in env) {
@@ -556,6 +569,7 @@ var __electrico_nonce=null;
             console.error("init_fork client connection error", e);
         });
         con.on('end', () => {
+            window.__electrico.parent_connected=false;
             console.log("init_fork client connection ended");
         });
         let sbuffer = new SerializationBuffer(clientid);
@@ -567,9 +581,28 @@ var __electrico_nonce=null;
         con.on('data', (data) => {
             parentPort.ondata(data);
         });
+        parentPort.send = function(message, sendHandle, options, callback) {
+            if (callback==null) {
+                callback=sendHandle;
+                sendHandle=null; options=null;
+            }
+            parentPort.postMessage(message);
+            if (callback!=null) {
+                callback(null);
+            }
+        };
+        let _parent_emit = parentPort.emit;
+        parentPort.emit = function(...args) {
+            _parent_emit.bind(parentPort)(...args);
+            if (args[0]=="message") {
+                process.emit("message", args[1].data);
+            } else {
+                process.emit(...args);
+            }
+        }
     };
     window.__electrico.init_fork=init_fork;
-    
+
     let mainIPCServer =  {
         init: function() {
             const {app} = require('electron/main');
@@ -614,15 +647,14 @@ var __electrico_nonce=null;
                     });
                 });
             });
+            this.initialized=true;
         },
         procs: {},
         connect: function (proc) {
             this.procs[proc.clientid]=proc;
-        }/*,
-        send: function (proc, data) {
-            this.procs[proc.clientid].con.write(data);
-        }*/
+        }
     };
+    //mainIPCServer.init();
     setTimeout(()=>{mainIPCServer.init();}, 0);
     window.__electrico.mainIPCServer=mainIPCServer;
 
@@ -654,10 +686,21 @@ var __electrico_nonce=null;
                     return window.__electrico.appPath;
                 }
             }
+            if (prop=="kill") {
+                return (pid, signal) => {
+                    if (signal==0 && !window.__electrico.parent_connected) {
+                        throw "parent gone";
+                    }
+                }
+            }
             if (prop=="exit") {
                 return () => {
-                    console.log("process.exit called");
+                    console.error("process.exit called");
+                    require('electron/main').app.quit();
                 }
+            }
+            if (prop=="send") {
+                return window.__electrico.parentPort.send.bind( window.__electrico.parentPort);
             }
             if (prop=="electronBinding") {
                 //console.log("electronBinding");
@@ -676,10 +719,14 @@ var __electrico_nonce=null;
             if (prop=="parentPort") {
                 return window.__electrico.parentPort;
             }
+            if (prop=="nextTick") {
+                return (cb)=> {
+                    setTimeout(cb, 0);
+                };
+            }
             if (_process==null) {
                 let {r, e} = $e_node.syncGetProcessInfo();
                 _process = JSON.parse(r);
-                _process.env['VSCODE_DEV']=1;
                 _process.version="v22.9.0";
                 _process.execArgv=[];
                 for (let k in _process) {

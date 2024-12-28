@@ -2,9 +2,8 @@ use log::{debug, error};
 use serde_json::Error;
 use tao::event_loop::EventLoopProxy;
 use tokio::runtime::Runtime;
-use wry::RequestAsyncResponder;
 
-use crate::{backend::Backend, common::respond_404, frontend::Frontend, node::node::AppEnv, types::ElectricoEvents};
+use crate::{backend::Backend, common::respond_404, frontend::Frontend, node::node::AppEnv, types::{ElectricoEvents, Responder}};
 
 use super::{dialog::process_dialog_command, types::APICommand};
 
@@ -13,7 +12,7 @@ pub fn process_command(tokio_runtime:&Runtime, app_env:&AppEnv,
     backend:&mut Backend,
     frontend:&mut Frontend,
     data:String,
-    responder:RequestAsyncResponder,
+    responder:Responder,
     data_blob:Option<Vec<u8>>)  {
     let command:Result<APICommand, Error> = serde_json::from_str(data.as_str());
     match command {

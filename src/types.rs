@@ -1,7 +1,7 @@
 use notify::Event;
 use tokio::sync::mpsc::Sender;
 use wry::RequestAsyncResponder;
-use crate::{electron::types::ElectronCommand, node::types::NodeCommand};
+use crate::{electron::types::ElectronCommand, ipcchannel::IPCResponse, node::types::NodeCommand};
 
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct Resources {
@@ -42,7 +42,7 @@ pub struct ForkParams {
 }
 
 pub enum ChildProcess {
-  StdinWrite {data: Vec<u8>},
+  StdinWrite {data: Option<Vec<u8>>, end:bool},
   Disconnect,
   Kill,
   StdoutEnd,
@@ -62,7 +62,7 @@ pub enum NETServer {
 
 pub enum BackendCommand {
   IPCCall {browser_window_id:String, request_id:String, params:String},
-  ChildProcessCallback {pid:String, stream:String, data:Option<Vec<u8>>},
+  ChildProcessCallback {pid:String, stream:String, end:bool, data:Option<Vec<u8>>},
   ChildProcessExit {pid:String, exit_code:Option<i32>},
   FSWatchEvent {wid:String, event:Event},
   NETServerStart {id:String, sender:Sender<NETServer>},
@@ -72,17 +72,19 @@ pub enum BackendCommand {
   NETClientConnStart {id:String, sender:Sender<NETConnection>},
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(serde::Serialize, serde::Deserialize, Debug)]
 #[serde(tag = "action")]
 pub enum Command {
-  PostIPC {browser_window_id: String, request_id:String, params: String},
+  PostIPC {http_id: String, nonce:Option<String>, request_id:String, params: String},
   SetIPCResponse {request_id:String, file_path:Option<String>},
-  DOMContentLoaded {browser_window_id: String, title:String},
-  BrowserWindowReadFile {browser_window_id: String, file_path: String, module:bool},
+  DOMContentLoaded {http_id: String, title:String},
+  BrowserWindowReadFile {http_id: String, file_path: String, module:bool},
   Node {invoke:NodeCommand},
   Electron {invoke:ElectronCommand},
   ShellCallback {stdout:String},
-  FrontendGetDataBlob {id: String}
+  FrontendGetDataBlob {id: String},
+  FrontendGetProcessInfo {http_id:String, nonce: String},
+  FrontendGetProtocols
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -92,11 +94,17 @@ pub enum FrontendCommand {
   GetProcessInfo {nonce:String},
   DOMContentLoaded {title: String},
   Alert {message: String},
-  GetDataBlob {id: String}
+  GetDataBlob {id: String},
+  GetProtocols
+}
+
+pub enum Responder {
+  CustomProtocol {responder:RequestAsyncResponder},
+  HttpProtocol {sender:std::sync::mpsc::Sender<IPCResponse>}
 }
 
 pub enum ElectricoEvents {
-  ExecuteCommand {command: Command, responder: RequestAsyncResponder, data_blob:Option<Vec<u8>>},
+  ExecuteCommand {command: Command, responder: Responder, data_blob:Option<Vec<u8>>},
   FrontendNavigate {browser_window_id:String, page: String, preload: String},
   SendChannelMessageRetry { browser_window_id:String, rid:String, channel:String, args:String},
   Exit,

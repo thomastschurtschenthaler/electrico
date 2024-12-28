@@ -32,32 +32,12 @@
             }
         }
         function create_ipc_url(path) {
-            //return window.location.protocol+"//electrico-ipc/"+path;
             if (window.location.protocol=="http:" || window.location.protocol=="https:") {
                 return "electrico-file://file/electrico-ipc/"+path;
             }
             return window.location.protocol+"//"+window.location.host+"/electrico-ipc/"+path;
         }
-        /*window.URL = class extends window.URL {
-            constructor(uri, baseUrl) {
-                let url = baseUrl!=null?baseUrl+uri:uri;
-                let ix = url.indexOf("://");
-                if (baseUrl!=null && ix>=0 && window.location.href.startsWith("fil://file/"+url.substring(0, ix+3))) {
-                    url = "fil://file/"+url;
-                }
-                super(url);
-            }
-        };
-        let _setAttribute=HTMLScriptElement.prototype.setAttribute;
-        HTMLScriptElement.prototype.setAttribute=function(a, v){
-            if (a=="src") {
-                let ix = v.indexOf("://");
-                if (ix>=0 && window.location.href.startsWith("fil://file/"+v.substring(0, ix+3))) {
-                    v = "fil://file/"+v;
-                }
-            }
-            _setAttribute.bind(this)(a, v);
-        };*/
+        window.__create_ipc_url = create_ipc_url;
         __init_shared(window);
         window.alert = (msg) => {
             const req = new XMLHttpRequest();
@@ -76,6 +56,9 @@
             let action = JSON.stringify({"action":"PostIPC", "request_id":request_id, "nonce": nonce, "params":JSON.stringify(args)});
             req.open("POST", window.__create_protocol_url(create_ipc_url("ipc."+channel+(data_blob!=null?("?"+encodeURIComponent(action)):""))), async);
             req.send(data_blob!=null?data_blob:action);
+            if (!async && req.status!=200) {
+                console.log("sendIPC sync error", req.status, channel);
+            }
             return req;
        }
         let uuidv4 = window.__uuidv4;
@@ -90,7 +73,7 @@
                             req.send(JSON.stringify({"action":"GetProcessInfo", "nonce":nonce}));
                             _processInfo = JSON.parse(req.responseText);
                         } else {
-                            _processInfo = {};
+                            _processInfo = {"env":{}};
                         }
                     }
                     if (prop=="on") {
@@ -228,10 +211,6 @@
                                     window.__electrico.received_ports[p.id] = port;
                                     let _postMessage=mchannel.port2.postMessage;
                                     mchannel.port2.postMessage = (...args) => {
-                                        console.log("sendChannelMessage.postMessage", args);
-                                        /*if (Buffer.from(data_blob).toString().indexOf("isExtensionDevelopmentDebug")>=0) {
-                                            console.error("sendIPC send isExtensionDevelopmentDebug");
-                                        }*/                       
                                         _postMessage.bind(mchannel.port2)(...args);
                                     }
                                     return mchannel.port2;
@@ -255,7 +234,6 @@
                                 if (this.readyState == 4) {
                                     if (req.status == 200) {
                                         args.data = Buffer.from(req.response);
-                                        //console.log("channelMessage", args, args.data.toString());
                                         doCall();
                                     }
                                 }
@@ -333,6 +311,9 @@
     }
     document.window=window;
     initscript(document);
+    if (window.__http_protocol!=null) {
+        require("./quirks.js");
+    }
     var {Buffer} = require("buffer");
     window.Buffer=Buffer;
     window.addEventListener("DOMContentLoaded", ()=>{

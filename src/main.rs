@@ -19,11 +19,10 @@ use log::{debug, error, info, trace, warn};
 use node::node::{process_node_command, AppEnv};
 use reqwest::StatusCode;
 use tao::event_loop::EventLoopBuilder;
-use common::{build_file_map, escape, handle_file_request, read_file, respond_404, respond_ok, respond_status, CONTENT_TYPE_BIN, CONTENT_TYPE_HTML, CONTENT_TYPE_JSON, JS_DIR_FRONTEND};
+use common::{build_file_map, escape, handle_file_request, read_file, respond_404, respond_ok, respond_status, CONTENT_TYPE_BIN, CONTENT_TYPE_HTML, CONTENT_TYPE_JSON, CONTENT_TYPE_TEXT, JS_DIR_FRONTEND};
 use tempfile::TempDir;
-use types::{Command, ElectricoEvents, ForkParams, Package, Resources};
+use types::{Command, ElectricoEvents, ForkParams, Package, Resources, Responder};
 use tao::{event::{Event, StartCause, WindowEvent},event_loop::{ControlFlow, EventLoop}};
-use uuid::Uuid;
 use clap::Parser;
 
 #[derive(Parser, Debug)]
@@ -124,10 +123,11 @@ fn main() -> wry::Result<()> {
   let frontend_js_files = build_file_map(&JS_DIR_FRONTEND);
   
   let proxy: tao::event_loop::EventLoopProxy<ElectricoEvents> = event_loop.create_proxy();
-  
+
+  let mut ipc_channel = IPCChannel::new();
   let mut backend = Backend::new(rsrc_dir.clone(), package.clone(), &event_loop, proxy.clone());
   let mut frontend = Frontend::new(rsrc_dir.clone());
-  let mut ipc_channel = IPCChannel::new();
+  
   
   let menu_channel = MenuEvent::receiver();
   
@@ -154,7 +154,7 @@ fn main() -> wry::Result<()> {
         for url in urls{
           app_env.add_arg(url.as_str().to_string());
         }
-      }
+      },
       Event::WindowEvent {
         event: WindowEvent::CloseRequested,
         window_id,
@@ -164,34 +164,94 @@ fn main() -> wry::Result<()> {
           backend.window_close(&Some(w_id.to_string()));
         }
       },
+      Event::WindowEvent {
+        event: WindowEvent::Focused(focus),
+        window_id,
+        ..
+      } => {
+        if let Some(w_id) = frontend.get_id(&window_id) {
+          backend.window_focus(w_id, focus);
+        }
+      },
       Event::UserEvent(ElectricoEvents::FrontendNavigate{browser_window_id, page, preload}) => {
         
       },
       Event::UserEvent(ElectricoEvents::ExecuteCommand{command, responder, data_blob}) => {
-        trace!("backend ExecuteCommand call");
+        trace!("backend ExecuteCommand call {:?}", command);
+    
         match command {
-          Command::PostIPC { browser_window_id, request_id, params} => {
-            trace!("PostIPC {} {} {}", browser_window_id, request_id, params);
-            let r_request_id = request_id.clone();
-            
-            let (sender, receiver): (Sender<IPCResponse>, Receiver<IPCResponse>) = mpsc::channel();
-            ipc_channel.start(request_id.clone(), sender.clone());
-            tokio_runtime.spawn(
-              async move {
-                let ipc_response = receiver.recv_timeout(Duration::from_secs(600));
-                match ipc_response {
-                  Ok (response) => {
-                    trace!("PostIPC Response {}", response.params.len());
-                    respond_status(StatusCode::OK, response.mime_type, response.params, responder);
-                  },
-                  Err (_e) => {
-                    warn!("PostIPC request expired (timeout): {}", r_request_id.clone());
-                    respond_status(StatusCode::GONE, CONTENT_TYPE_JSON.to_string(), "expired (timeout)".to_string().into_bytes(), responder);
+          Command::PostIPC { http_id, nonce, request_id, params} => {
+            if let Responder::HttpProtocol{sender} = responder {
+              if let Some(browser_window_id) = frontend.get_browser_window_id(&http_id) {
+                if let Some(nonce) = nonce {
+                  if browser_window_id!=&nonce {
+                    let _ = sender.send(IPCResponse::new("nonce".to_string().into_bytes(), CONTENT_TYPE_HTML.to_string(),StatusCode::FORBIDDEN));
+                    return;
                   }
                 }
+                trace!("PostIPC {} {} {}", browser_window_id, request_id, params);
+                let r_request_id = request_id.clone();
+                let (ipc_sender, ipc_receiver): (Sender<IPCResponse>, Receiver<IPCResponse>) = mpsc::channel();
+                ipc_channel.start(browser_window_id.clone(), request_id.clone(), ipc_sender.clone());
+                tokio_runtime.spawn(
+                  async move {
+                    let ipc_response = ipc_receiver.recv_timeout(Duration::from_secs(600));
+                    match ipc_response {
+                      Ok (response) => {
+                        trace!("PostIPC Response {}, {}", r_request_id, response.params.len());
+                        let _ = sender.send(response); 
+                      },
+                      Err (_e) => {
+                        warn!("PostIPC request expired (timeout): {}", r_request_id.clone());
+                        let _ = sender.send(IPCResponse::new("expired".to_string().as_bytes().to_vec(), CONTENT_TYPE_TEXT.to_string(), StatusCode::GONE)); 
+                      }
+                    }
+                  }
+                );
+                backend.call_ipc_channel(browser_window_id.clone(), request_id, params, data_blob);
+                return;
               }
-            );
-            backend.call_ipc_channel(browser_window_id, request_id, params, data_blob);
+              let _ = sender.send(IPCResponse::new("http_id".to_string().into_bytes(), CONTENT_TYPE_HTML.to_string(),StatusCode::FORBIDDEN));
+            }
+          },
+          Command::FrontendGetProcessInfo { http_id, nonce } => {
+            if let Some(browser_window_id) = frontend.get_browser_window_id(&http_id) {
+              if browser_window_id==&nonce {
+                process_node_command(&tokio_runtime, &app_env, proxy.clone(), &mut backend, node::types::NodeCommand::GetProcessInfo, responder, data_blob);
+                return;
+              }
+            }
+            respond_status(StatusCode::FORBIDDEN, CONTENT_TYPE_BIN.to_string(), "http_id".to_string().into_bytes(), responder);
+          },
+          Command::FrontendGetDataBlob { id } => {
+            if let Some(data) = frontend.get_data_blob(id) {
+              respond_status(StatusCode::OK, CONTENT_TYPE_BIN.to_string(), data, responder);
+            } else {
+              respond_404(responder);
+            }
+          },
+          Command::FrontendGetProtocols => {
+            let protocols = frontend.get_file_protocols();
+            match serde_json::to_string(protocols) {
+              Ok(json) => {
+                  respond_status(StatusCode::OK, CONTENT_TYPE_JSON.to_string(), json.into_bytes(), responder);
+              },
+              Err(e) => {
+                  respond_status(StatusCode::INTERNAL_SERVER_ERROR, CONTENT_TYPE_TEXT.to_string(), format!("GetSFrontendGetProtocols json serialization error: {}", e).into_bytes(), responder);
+              }
+            }
+          }
+          Command::DOMContentLoaded { http_id, title} => {
+            let browser_window_id:String;
+            if let Some(id) = frontend.get_browser_window_id(&http_id) {
+              browser_window_id = id.clone(); 
+            } else {
+              respond_status(StatusCode::FORBIDDEN, CONTENT_TYPE_HTML.to_string(), "http_id".to_string().into_bytes(), responder);
+              return;
+            }
+            backend.dom_content_loaded(&browser_window_id);
+            frontend.dom_content_loaded(&browser_window_id, title);
+            respond_status(StatusCode::OK, CONTENT_TYPE_HTML.to_string(), "OK".to_string().into_bytes(), responder);
           },
           Command::SetIPCResponse {request_id, file_path} => {
             trace!("backend ExecuteCommand call SetIPCResponse {}", request_id);
@@ -200,14 +260,14 @@ fn main() -> wry::Result<()> {
                 if let Some(file_path) = file_path {
                   let mime_type = mime_guess::from_path(&file_path).first_or_octet_stream().to_string();
                   if let Some(data) = read_file(&file_path) {
-                    let _ = sender.send(IPCResponse::new(data, mime_type));
+                    let _ = sender.send(IPCResponse::new(data, mime_type,StatusCode::OK));
                   } else {
                     respond_404(responder);
                     return;
                   }
                 } else {
                   if let Some(params) = data_blob {
-                    let _ = sender.send(IPCResponse::new(params, CONTENT_TYPE_JSON.to_string()));
+                    let _ = sender.send(IPCResponse::new(params, CONTENT_TYPE_JSON.to_string(), StatusCode::OK));
                   } else {
                     error!("SetIPCResponse - no data blob");
                     respond_404(responder);
@@ -223,7 +283,14 @@ fn main() -> wry::Result<()> {
               }
             }
           },
-          Command::BrowserWindowReadFile { browser_window_id, file_path, module } => {
+          Command::BrowserWindowReadFile { http_id, file_path, module } => {
+              let browser_window_id:String;
+              if let Some(id) = frontend.get_browser_window_id(&http_id) {
+                browser_window_id = id.clone(); 
+              } else {
+                respond_status(StatusCode::FORBIDDEN, CONTENT_TYPE_HTML.to_string(), "http_id".to_string().into_bytes(), responder);
+                return;
+              }
               trace!("BrowserWindowReadFile {} {}", browser_window_id, file_path);
               match frontend.get_client_path_base(&browser_window_id) {
                   Some(client_path_base) => {
@@ -241,34 +308,23 @@ fn main() -> wry::Result<()> {
                   }
               }
           },
-          Command::DOMContentLoaded { browser_window_id, title} => {
-            backend.dom_content_loaded(&browser_window_id);
-            frontend.dom_content_loaded(&browser_window_id, title);
-          },
           Command::ShellCallback { stdout } => {
-            debug!("ShellCallback {}", stdout);
             let _ = io::stdout().write_all(stdout.as_bytes());
             let _ = io::stdout().flush();
             *control_flow = ControlFlow::Exit;
           },
-          Command::FrontendGetDataBlob { id } => {
-            if let Some(data) = frontend.get_data_blob(id) {
-              respond_status(StatusCode::OK, CONTENT_TYPE_BIN.to_string(), data, responder);
-          } else {
-              respond_404(responder);
-          }
-          }
           Command::Electron { invoke } => {
             let menu_ret = process_electron_command(&tokio_runtime, event_loop, proxy.clone(), 
               &mut app_env, &rsrc_dir, &package,
-              &mut frontend, &mut backend, invoke, responder, data_blob);
+              &mut frontend, &mut backend, &mut ipc_channel, invoke, responder, data_blob);
             if let Some(menu) = menu_ret.clone() {
               _main_menu_hold = menu_ret;
             }
           },
           Command::Node { invoke } => {
             process_node_command(&tokio_runtime, &app_env, proxy.clone(), &mut backend, invoke, responder, data_blob);
-          }
+          },
+          _ => ()
         }
       },
       Event::UserEvent(ElectricoEvents::SendChannelMessageRetry { browser_window_id, rid, channel, args }) => {
@@ -276,6 +332,7 @@ fn main() -> wry::Result<()> {
         frontend.send_channel_message(proxy.clone(), browser_window_id, rid, channel, args, None);
       },
       Event::UserEvent(ElectricoEvents::Exit) => {
+        debug!("main Exit");
         backend.shutdown();
         *control_flow = ControlFlow::Exit;
       },

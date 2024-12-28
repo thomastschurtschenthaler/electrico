@@ -1,13 +1,13 @@
-use std::{ffi::OsStr, fs::{self, remove_dir, remove_file, OpenOptions}, io::{Read, Seek, SeekFrom, Write}, path::Path, time::SystemTime};
+use std::{ffi::OsStr, fs::{self, remove_dir, remove_file, OpenOptions}, io::{Read, Seek, SeekFrom, Write}, os::unix::fs::MetadataExt, path::Path, time::SystemTime};
 
 use log::{error, debug, trace};
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
-use reqwest::{header::{ACCESS_CONTROL_ALLOW_ORIGIN, CONTENT_TYPE}, StatusCode};
+use reqwest::StatusCode;
+use substring::Substring;
 use tao::event_loop::EventLoopProxy;
 use tokio::runtime::Runtime;
-use wry::{http::Response, RequestAsyncResponder};
 
-use crate::{backend::Backend, common::{respond_404, respond_ok, respond_status, CONTENT_TYPE_BIN, CONTENT_TYPE_JSON, CONTENT_TYPE_TEXT}, node::{apis::types::FSDirent, common::send_command, node::AppEnv}, types::{BackendCommand, ElectricoEvents}};
+use crate::{backend::Backend, common::{respond_404, respond_ok, respond_status, CONTENT_TYPE_BIN, CONTENT_TYPE_JSON, CONTENT_TYPE_TEXT}, node::{apis::types::FSDirent, common::send_command, node::AppEnv}, types::{BackendCommand, ElectricoEvents, Responder}};
 
 use super::types::{FSCommand, FSStat};
 
@@ -15,20 +15,20 @@ pub fn process_fs_command(tokio_runtime:&Runtime, _app_env:&AppEnv,
     proxy:EventLoopProxy<ElectricoEvents>,
     backend:&mut Backend,
     command:FSCommand,
-    responder:RequestAsyncResponder,
+    responder:Responder,
     data_blob:Option<Vec<u8>>)  {
     
     let command_sender = backend.command_sender();
     match command {
         FSCommand::Access { path, mode } => {
             if mode & 1 !=0 && !Path::new(&path).exists() {
-                responder.respond(Response::builder().header(ACCESS_CONTROL_ALLOW_ORIGIN, "*").header(CONTENT_TYPE, CONTENT_TYPE_TEXT).body(Vec::from("NOK".to_string().as_bytes())).unwrap());
+                respond_status(StatusCode::OK, CONTENT_TYPE_TEXT.to_string(), Vec::from("NOK".to_string().as_bytes()), responder);
                 return;
             }
             match fs::metadata(path.as_str()) {
                 Ok (meta) => {
                     if mode & 4 !=0 && meta.permissions().readonly() {
-                        responder.respond(Response::builder().header(ACCESS_CONTROL_ALLOW_ORIGIN, "*").header(CONTENT_TYPE, CONTENT_TYPE_TEXT).body(Vec::from("NOK".to_string().as_bytes())).unwrap());
+                        respond_status(StatusCode::OK, CONTENT_TYPE_TEXT.to_string(), Vec::from("NOK".to_string().as_bytes()), responder);
                         return;
                     }
                     respond_ok(responder);
@@ -46,6 +46,7 @@ pub fn process_fs_command(tokio_runtime:&Runtime, _app_env:&AppEnv,
             } else {
                 let mut created:Option<SystemTime>=None;
                 let mut modified:Option<SystemTime>=None;
+                let mut size:Option<u64>=None;
                 if let Ok(meta) = p.metadata() {
                     if let Ok(c) = meta.created() {
                         created = Some(c);
@@ -53,8 +54,9 @@ pub fn process_fs_command(tokio_runtime:&Runtime, _app_env:&AppEnv,
                     if let Ok(m) = meta.modified() {
                         modified = Some(m);
                     }
+                    size = Some(meta.size());
                 }
-                let stat = FSStat::new(p.is_dir(), created, modified);
+                let stat = FSStat::new(p.is_dir(), size, created, modified);
                 match serde_json::to_string(&stat) {
                     Ok(json) => {
                         respond_status(StatusCode::OK, CONTENT_TYPE_JSON.to_string(), json.into_bytes(), responder);
@@ -107,6 +109,23 @@ pub fn process_fs_command(tokio_runtime:&Runtime, _app_env:&AppEnv,
                     error!("FSMkdir create_dir error: {} {}", path.as_str(), e);
                     respond_404(responder);
                 return;
+                }
+            }
+        },
+        FSCommand::CopyFile { src, dest, mode } => {
+            if let Some(ix) = dest.rfind("/") {
+                let dest_str = dest.substring(0, ix).to_string();
+                let dest_path = Path::new(&dest_str);
+                if !dest_path.exists() {
+                    let _ = fs::create_dir_all(dest_path);
+                }
+            }
+            match fs::copy(Path::new(&src), Path::new(&dest)) {
+                Ok(r) => {
+                    respond_status(StatusCode::OK, CONTENT_TYPE_TEXT.to_string(), format!("{r}").into_bytes(), responder);
+                },
+                Err(e) => {
+                    respond_status(StatusCode::BAD_REQUEST, CONTENT_TYPE_TEXT.to_string(), format!("{e}").into_bytes(), responder);
                 }
             }
         },
@@ -299,7 +318,6 @@ pub fn process_fs_command(tokio_runtime:&Runtime, _app_env:&AppEnv,
             match RecommendedWatcher::new(
                 move |res| {
                     if let Ok(event) = res {
-                        trace!("fswatch receive event {:?}", event);
                         let w_proxy = proxy.clone();
                         let w_command_sender = command_sender.clone();
                         let _ = send_command(&w_proxy, &w_command_sender, BackendCommand::FSWatchEvent { wid: w_wid.clone(), event: event });

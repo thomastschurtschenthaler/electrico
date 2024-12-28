@@ -1,9 +1,9 @@
 use reqwest::{header::ACCESS_CONTROL_ALLOW_ORIGIN, Method, Request, StatusCode, Url};
 use tao::event_loop::EventLoopProxy;
 use tokio::runtime::Runtime;
-use wry::{http::Response, RequestAsyncResponder};
+use wry::http::Response;
 
-use crate::{backend::Backend, common::{respond_client_error, respond_ok}, node::node::AppEnv, types::ElectricoEvents};
+use crate::{backend::Backend, common::{respond_client_error, respond_ok, respond_status, CONTENT_TYPE_BIN}, node::node::AppEnv, types::{ElectricoEvents, Responder}};
 
 use super::types::HTTPCommand;
 
@@ -11,7 +11,7 @@ pub fn process_http_command(tokio_runtime:&Runtime, _app_env:&AppEnv,
     proxy:EventLoopProxy<ElectricoEvents>,
     backend:&mut Backend,
     command:HTTPCommand,
-    responder:RequestAsyncResponder,
+    responder:Responder,
     data_blob:Option<Vec<u8>>)  {
     
     match command {
@@ -58,7 +58,7 @@ pub fn process_http_command(tokio_runtime:&Runtime, _app_env:&AppEnv,
                                                 rbuilder = rbuilder.header(hname, h.1);
                                             }
                                         }
-                                        responder.respond(rbuilder.body(Vec::from(body)).unwrap());
+                                        respond_status(StatusCode::OK, CONTENT_TYPE_BIN.to_string(), Vec::from(body), responder);
                                     }, 
                                     Err(e) => {
                                         respond_client_error(format!("could not read response {}", e), responder);

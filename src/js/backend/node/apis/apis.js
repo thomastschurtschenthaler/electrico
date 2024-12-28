@@ -4,6 +4,7 @@ require("./child_process.js");
 require("./http.js");
 require("./crypto.js");
 require("./node-fetch.js");
+require("./stream.js");
 window.__electrico.libs.constants={
     hasOwnProperty:(p) => {
         return false;

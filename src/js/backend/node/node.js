@@ -1,6 +1,5 @@
 (function () {
     //let path = require('path');
-    let uuidv4 = window.__uuidv4;
     var global = window;
     window.global = global;
     let Buffer = require('buffer').Buffer;
@@ -25,6 +24,8 @@
             })
         }
     }
+    util.TextDecoder = window.TextDecoder;
+    util.TextEncoder = window.TextEncoder;
     let path = require('path');
     
     window.__electrico = window.__electrico || {libs:{}};
@@ -149,11 +150,6 @@
         assert: {
 
         },
-        stream: {
-            Transform: class {
-
-            }
-        },
         readline: {
             createInterface: (options) => {
                 // TODO
@@ -180,8 +176,6 @@
     window.__electrico.libs.zlib = node.zlib;
     window.__electrico.libs["node:assert"] =node.assert;
     window.__electrico.libs.assert = node.assert;
-    window.__electrico.libs["node:stream"] =node.stream;
-    window.__electrico.libs.stream = node.stream;
     window.__electrico.libs["node:readline"] =node.readline;
     window.__electrico.libs.readline = node.readline;
     window.__electrico.libs["node:tls"] =node.tls;

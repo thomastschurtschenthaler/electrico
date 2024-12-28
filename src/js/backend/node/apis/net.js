@@ -154,6 +154,14 @@
                 }, 0);
             }
             return connection;
+        },
+        Socket: class extends EventEmitter {
+            constructor() {
+                super();
+            }
+            connect(port, host) {
+                console.log("Socket.connect", port, host);
+            }
         }
     };
     window.__electrico.libs["node:net"] = net;

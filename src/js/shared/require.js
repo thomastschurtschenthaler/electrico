@@ -146,6 +146,9 @@
                     let package = JSON.parse(preq.responseText);
                     mainjs = package.main!=null?package.main:(package.exports!=null?(package.exports.default!=null?package.exports.default:package.exports):(package.files!=null?package.files[0]:null));
                 }
+                if (mainjs==null && expanded_path.endsWith(".js")) {
+                    expanded_mod_path=expanded_path.substring(0, expanded_path.lastIndexOf("."));
+                }
                 mainjs = mainjs || "index.js";
                 expanded_path = expanded_mod_path+"/"+mainjs;
                 
@@ -174,14 +177,15 @@
                 exported = JSON.parse(script);
             } else {
                 let node_modules_path = null;
-                if (_this==null && window.__dirname!="" && expanded_path.startsWith("/")) {
-                    node_modules_path = resolveNodeModulesPath(expanded_path);
+                if (_this==null && window.__dirname!="") {
+                    node_modules_path = resolveNodeModulesPath(expanded_path.startsWith("/")?expanded_path:window.__dirname+expanded_path);
                 }
                 
                 let __import_mpath = expanded_path.substring(0, expanded_path.lastIndexOf("/"));
                 let __dirname = __import_mpath.startsWith(window.__dirname)?__import_mpath:window.__dirname+"/"+__import_mpath;
                 let __Import_meta = {url:expanded_path.startsWith(window.__dirname)?expanded_path:window.__dirname+"/"+expanded_path};
                 let _this2 = {"parent": _this, "__import_mpath":__import_mpath, "__filename":__Import_meta.url, "node_modules_path": _this!=null?_this.node_modules_path:null};
+                let __filename = __Import_meta.url;
                 if (node_modules_path!=null) _this2.node_modules_path=node_modules_path;
 
                 let circular = circularImport(_this2);
@@ -195,7 +199,26 @@
                 try {
                     eval(script);
                 } catch (e) {
-                    window._consolelog("require error", expanded_path, script, e);
+                    console.error("require error", expanded_path, script, e);
+                      
+                    /*console.error("require error", expanded_path, e);
+                    let fs = require("fs");
+                    let buff = Buffer.from(script);
+                    fs.open("/Users/thomastschurtschenthaler/Documents/workspaces/electrico_stage/electrico/Resources/err_"+window.__uuidv4()+".js", "w", (err, fid)=>{
+                        let i=0;
+                        let dowrite = () => {
+                            fs.write(fid, buff.subarray(i, Math.min(buff.length, i+10000)), ()=>{
+                                i+=10000;
+                                if (i<buff.length) {
+                                    setTimeout(dowrite, 0);
+                                } else {
+                                    fs.close(fid, ()=>{});
+                                }
+                            });
+                        }
+                        dowrite();
+                    });*/
+                   
                     throw e;
                 }
                 if (exports.__electrico_deferred!=null) {
@@ -301,7 +324,7 @@
             script = script.replaceAll(/[ ,\r,\n,;]export +(default )?(const )?(var )?(let )? *(([^{ ,;,\n}]*))(.*);/g,"__e_exports('$1')['$6']=$6$7;");
 
             script = script.replaceAll(/\export +(default)?(const)? *((async +function)?(function)?(function\*)?(async +function\*)?(class)? +([^{ ,(,;,\n}]*))/g, "__e_exports('$1')['$9']=$9=$3");
-            script = script.replaceAll('"use strict"', "");
+            //script = script.replaceAll(/([;,\r,\n])"use strict"/g, "");
             script = script.replaceAll(/[\r,\n] *}[\r,\n] *\(function/g, "\n};\n(function"); // Color
 
             let sourcemapspattern = "sourceMappingURL=data:application/json;base64,";

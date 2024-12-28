@@ -132,6 +132,15 @@
                         }
                         _postMessage({channel:channel, message:message}, ports);
                     };
+                    this.getOSProcessId = ()=> {
+                        return process.pid;
+                    };
+                    this.getProcessId = ()=> {
+                        return process.pid;
+                    };
+                    this.setIgnoreMenuShortcuts = (ignore) => {
+                        //TODO
+                    };
                     this.send = (function(channel, ...args) {
                         this.postMessage(channel, args.length==1?args[0]:{_electrico_args:args});
                     }).bind(this);
@@ -198,7 +207,7 @@
             }).bind(this);
             this.setPosition = ((x, y, animate) => {
                 let b = this.getContentBounds();
-                this.setContentBounds({x:x, y:y, with:b.width, height:b.height});
+                this.setContentBounds({x:x, y:y, width:b.width, height:b.height});
             }).bind(this);
             this.getPosition = (() => {
                 let b = this.getContentBounds();
@@ -206,13 +215,20 @@
             }).bind(this);
             this.setSize = ((width, height, animate) => {
                 let b = this.getContentBounds();
-                this.setContentBounds({x:b.x, y:b.y, with:width, height:height});
+                this.setContentBounds({x:b.x, y:b.y, width:width, height:height});
             }).bind(this);
             this.getSize = (() => {
                 let b = this.getContentBounds();
                 return [b.width, b.height];
             }).bind(this);
+            this.getMinimumSize = (() => {
+                return this.getSize();
+            }).bind(this);
+            this.setMinimumSize = ((width, height) => {
+                //this.setSize(width, height);
+            }).bind(this);
             this.close = (() => {
+                console.log("BrowserWindow.close");
                 window.__electrico.callAppOn("window-close", this._e_id);
             }).bind(this);
             this.show = (() => {
@@ -436,10 +452,10 @@
                     },
                     registerFileProtocol: (schema, handler) => {
                         console.log("session.protocol.registerFileProtocol", schema);
-                        let {r, e} = $e_electron.syncRegisterFileProtocol({schema:schema});
-                        if (e!=null) throw e;
+                        $e_electron.asyncRegisterFileProtocol({schema:schema});
                         window.__electrico.file_protocol[schema] = (requestID, request) => {
                             //console.log("file_protocol call", requestID, request);
+                            request.url=schema+"://"+request.url;
                             handler(request, (response) => {
                                 //console.log("file_protocol call handler response", request, response);
                                 let urlcmd = JSON.stringify({"action":"SetIPCResponse", "request_id":requestID, "params": response.data, file_path:response.path});
@@ -461,6 +477,9 @@
             }
         },
         app: new AppCls(),
+        clipboard: {
+            has: (format, type)=>{return false}
+        },
         ipcMain: new IPCMainCls(),
         BrowserWindow: BrowserWindow,
         Menu: Menu,
@@ -478,7 +497,7 @@
                 console.log("registerSchemesAsPrivileged", customSchemes);
             },
             registerFileProtocol: (schema, handler) => {
-                console.log("protocol.registerFileProtocol", schema);
+                electron.session.defaultSession.protocol.registerFileProtocol(schema, handler);
             },
             registerBufferProtocol: (schema, handler) => {
                 console.log("registerBufferProtocol", schema);
@@ -503,7 +522,7 @@
                     args=options;
                     options=null;
                 }
-                args = args || "[]";
+                args = args || [];
                 class UtilityProcessCls extends window.__electrico.ProcessPort {
                     constructor() {
                         super();
@@ -545,10 +564,13 @@
                 const { spawn } = require('node:child_process');
                 let ix = modulePath.indexOf("/")+1;
                 if (modulePath.startsWith(window.__electrico.appPath)) {
-                    ix = window.__electrico.appPath.length+1;
+                    ix = window.__electrico.appPath.length;
+                    if (!window.__electrico.appPath.endsWith("/")) ix+=1;
                 }
                 let moduleSrc = modulePath.substring(0, ix);
                 let moduleMain = modulePath.substring(ix);
+                if (moduleMain.startsWith("/")) moduleMain = moduleMain.substring(1);
+                options = options || {};
                 if (options.env==null) options.env = process.env;
                 let fork = {args:args, ...options, moduleSrc:moduleSrc, moduleMain:moduleMain, hook:window.__electrico.mainIPCServer.hook, clientid:uProc.clientid};
                 fork.env = JSON.stringify(fork.env);
@@ -561,7 +583,13 @@
                 let child = spawn(process.execPath, e_args);
                 uProc.stdout = child.stdout;
                 uProc.stderr = child.stderr;
+                
                 uProc.pid = child.pid;
+                let _child_emit = child.emit;
+                child.emit = function(...args) {
+                    _child_emit.bind(child)(...args);
+                    uProc.emit(...args);
+                }
                 uProc.kill = child.kill;
                 return uProc;
             }

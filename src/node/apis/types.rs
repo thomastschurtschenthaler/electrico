@@ -1,4 +1,4 @@
-use std::time::SystemTime;
+use std::{collections::HashMap, time::SystemTime};
 
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(tag = "api")]
@@ -24,10 +24,16 @@ pub struct HTTPOptions {
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
+pub struct SpawnOptions {
+  pub cwd:Option<String>,
+  pub env:Option<HashMap<String, String>>
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
 #[serde(tag = "action")]
 pub enum ChildprocessCommand {
-  Spawn {cmd: Option<String>, args:Option<Vec<String>>},
-  StdinWrite {pid: String},
+  Spawn {cmd: Option<String>, args:Option<Vec<String>>, options:Option<SpawnOptions>},
+  StdinWrite {pid: String, end:bool},
   Disconnect {pid: String},
   Kill {pid: String}
 }
@@ -55,6 +61,7 @@ pub enum FSCommand {
   Lstat {path:String},
   Rm {path:String, options:Option<FSOptions>},
   Mkdir {path:String, options:Option<FSOptions>},
+  CopyFile {src:String, dest:String, mode:Option<i32>},
   ReadFile {path:String, options:Option<FSOptions>},
   ReadDir {path:String, options:Option<FSOptions>},
   WriteFile {path:String, options:Option<FSOptions>},
@@ -81,12 +88,13 @@ pub struct FSOptions {
 pub struct FSStat {
   #[serde(rename = "isDirectory")]
   pub is_directory: bool,
+  pub size: Option<u64>,
   pub birthtime: Option<SystemTime>,
   pub mtime: Option<SystemTime>
 }
 impl FSStat {
-  pub fn new(is_directory: bool, birthtime:Option<SystemTime>, mtime:Option<SystemTime>) -> FSStat {
-    FSStat { is_directory, birthtime, mtime }
+  pub fn new(is_directory: bool, size:Option<u64>, birthtime:Option<SystemTime>, mtime:Option<SystemTime>) -> FSStat {
+    FSStat { size, is_directory, birthtime, mtime }
   }
 }
 

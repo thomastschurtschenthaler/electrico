@@ -16,10 +16,6 @@
     class DatabaseCls extends EventEmitter {
         constructor(path, cb) {
             super();
-            $e_node.asyncAddon_SQLite_Connect({"path":path}).then((e, r)=>{
-                this._cid = r;
-                if (cb!=null) cb(e);
-            });
             this.close = ((cb) => {
                 let {e, r} = $e_node.syncAddon_SQLite_Close({"cid":this._cid});
                 if (cb!=null) cb(e, r);    
@@ -59,6 +55,26 @@
                     if (cb!=null) cb(e, r);
                 });
             }).bind(this);
+            if (!path.startsWith("memory:")) {
+                let folder = path.substring(0, path.lastIndexOf("/"));
+                if (folder.length>1) {
+                    const fs = require("fs");
+                    if (!fs.existsSync(folder)) {
+                        console.log("DatabaseCls creating folder:", folder);
+                        let {e, r} = fs.mkdirSync(folder, {"recursive": true});
+                        if (e!=null) {
+                            console.error("DatabaseCls mkdirSync failed", folder, e);
+                        }
+                    } else {
+                        console.log("DatabaseCls folder exists:", folder);
+                    }
+                }
+            }
+            let {e, r} = $e_node.syncAddon_SQLite_Connect({"path":path});
+            this._cid = r;
+            if (cb!=null) {
+                setTimeout(()=>{cb(e);}, 0);
+            }
         }
     };
 
