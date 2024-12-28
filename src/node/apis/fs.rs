@@ -1,4 +1,4 @@
-use std::{ffi::OsStr, fs::{self, remove_dir, remove_file, OpenOptions}, io::{Read, Seek, SeekFrom, Write}, os::unix::fs::MetadataExt, path::Path, time::SystemTime};
+use std::{ffi::OsStr, fs::{self, remove_dir, remove_file, OpenOptions}, io::{Read, Seek, SeekFrom, Write}, path::Path, time::SystemTime};
 
 use log::{error, debug, trace};
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
@@ -54,7 +54,7 @@ pub fn process_fs_command(tokio_runtime:&Runtime, _app_env:&AppEnv,
                     if let Ok(m) = meta.modified() {
                         modified = Some(m);
                     }
-                    size = Some(meta.size());
+                    size = Some(meta.len());
                 }
                 let stat = FSStat::new(p.is_dir(), size, created, modified);
                 match serde_json::to_string(&stat) {
