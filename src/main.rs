@@ -5,7 +5,7 @@ mod backend;
 mod frontend;
 mod node;
 mod electron;
-use std::{fs::{self}, io::{self, stdin, Read, Write}, path::{Path, PathBuf}, str::FromStr, sync::mpsc::{self, Receiver, Sender}, time::{Duration, SystemTime}};
+use std::{fs::{self}, io::{self, stdin, Read, Write}, path::{Path, PathBuf}, str::FromStr, sync::mpsc::{self, Receiver, Sender}, time::Duration};
 
 use electron::electron::process_electron_command;
 use env_logger::Env;
@@ -182,36 +182,40 @@ fn main() -> wry::Result<()> {
         match command {
           Command::PostIPC { http_id, nonce, request_id, params} => {
             if let Responder::HttpProtocol{sender} = responder {
-              if let Some(browser_window_id) = frontend.get_browser_window_id(&http_id) {
-                if let Some(nonce) = nonce {
-                  if browser_window_id!=&nonce {
-                    let _ = sender.send(IPCResponse::new("nonce".to_string().into_bytes(), CONTENT_TYPE_HTML.to_string(),StatusCode::FORBIDDEN));
-                    return;
-                  }
-                }
-                trace!("PostIPC {} {} {}", browser_window_id, request_id, params);
-                let r_request_id = request_id.clone();
-                let (ipc_sender, ipc_receiver): (Sender<IPCResponse>, Receiver<IPCResponse>) = mpsc::channel();
-                ipc_channel.start(browser_window_id.clone(), request_id.clone(), ipc_sender.clone());
-                tokio_runtime.spawn(
-                  async move {
-                    let ipc_response = ipc_receiver.recv_timeout(Duration::from_secs(600));
-                    match ipc_response {
-                      Ok (response) => {
-                        trace!("PostIPC Response {}, {}", r_request_id, response.params.len());
-                        let _ = sender.send(response); 
-                      },
-                      Err (_e) => {
-                        warn!("PostIPC request expired (timeout): {}", r_request_id.clone());
-                        let _ = sender.send(IPCResponse::new("expired".to_string().as_bytes().to_vec(), CONTENT_TYPE_TEXT.to_string(), StatusCode::GONE)); 
-                      }
+              let browser_window_id = frontend.get_browser_window_id(&http_id);
+              let browser_window_id = browser_window_id.cloned();
+              let browser_window_id2 = browser_window_id.clone();
+              trace!("PostIPC {:?} {} {}", browser_window_id, request_id, params);
+              let r_request_id = request_id.clone();
+              let (ipc_sender, ipc_receiver): (Sender<IPCResponse>, Receiver<IPCResponse>) = mpsc::channel();
+              tokio_runtime.spawn(
+                async move {
+                if let Some(browser_window_id) = browser_window_id.clone() {
+                  if let Some(nonce) = nonce {
+                    if browser_window_id!=nonce {
+                      let _ = sender.send(IPCResponse::new("nonce".to_string().into_bytes(), CONTENT_TYPE_HTML.to_string(),StatusCode::FORBIDDEN)).await;
+                      return;
                     }
                   }
-                );
+                  let ipc_response = ipc_receiver.recv_timeout(Duration::from_secs(600));
+                  match ipc_response {
+                    Ok (response) => {
+                      trace!("PostIPC Response {}, {}", r_request_id, response.params.len());
+                      let _ = sender.send(response).await; 
+                    },
+                    Err (_e) => {
+                      warn!("PostIPC request expired (timeout): {}", r_request_id.clone());
+                      let _ = sender.send(IPCResponse::new("expired".to_string().as_bytes().to_vec(), CONTENT_TYPE_TEXT.to_string(), StatusCode::GONE)).await; 
+                    }
+                  }
+                } else {
+                  let _ = sender.send(IPCResponse::new("http_id".to_string().into_bytes(), CONTENT_TYPE_HTML.to_string(),StatusCode::FORBIDDEN)).await;
+                }
+              });
+              if let Some(browser_window_id) = browser_window_id2 {
+                ipc_channel.start(browser_window_id.clone(), request_id.clone(), ipc_sender.clone());
                 backend.call_ipc_channel(browser_window_id.clone(), request_id, params, data_blob);
-                return;
               }
-              let _ = sender.send(IPCResponse::new("http_id".to_string().into_bytes(), CONTENT_TYPE_HTML.to_string(),StatusCode::FORBIDDEN));
             }
           },
           Command::FrontendGetProcessInfo { http_id, nonce } => {

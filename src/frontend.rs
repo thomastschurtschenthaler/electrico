@@ -1,4 +1,4 @@
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
 use std::thread;
 use std::time::Duration;
 use http_body_util::{BodyExt, Full};
@@ -6,19 +6,19 @@ use hyper::body::Bytes;
 use hyper::header::ACCESS_CONTROL_ALLOW_ORIGIN;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
-use hyper::{Method, Request, Response};
+use hyper::{Request, Response};
 use hyper_util::rt::TokioIo;
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpListener;
 use log::{debug, error, info, trace, warn};
 use include_dir::{include_dir, Dir};
 use reqwest::StatusCode;
 use substring::Substring;
-use std::sync::mpsc::{self, Receiver, Sender};
+use tokio::sync::mpsc::{self, Receiver, Sender};
+use tokio::time::timeout;
 use uuid::Uuid;
 use std::{collections::HashMap, fs, path::PathBuf};
 use tao::{dpi::{LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize}, event_loop::{EventLoopProxy, EventLoopWindowTarget}, window::{Icon, Window, WindowBuilder, WindowId}};
 use serde_json::Error;
-use std::net::ToSocketAddrs;
 use wry::{WebView, WebViewBuilder};
 use crate::common::get_message_data_http;
 use crate::ipcchannel::IPCResponse;
@@ -132,7 +132,7 @@ impl Frontend {
                             query = Some(q.to_string());
                         } 
                         let s2_proxy = s_proxy.clone();
-                        let (req_sender, req_receiver): (Sender<IPCResponse>, Receiver<IPCResponse>) = mpsc::channel();
+                        let (req_sender, mut req_receiver): (Sender<IPCResponse>, Receiver<IPCResponse>) = mpsc::channel(100);
                         let protocols = protocols.clone();
                         return async move {
                             if let Some((http_id, protocol, url_root, url)) = urlparts {
@@ -166,25 +166,29 @@ impl Frontend {
                                             }, responder:crate::types::Responder::HttpProtocol { sender:req_sender}, data_blob:None});
                                         }
                                     }
-                                    if let Ok(r) = req_receiver.recv_timeout(Duration::from_secs(3)) {
-                                        trace!("http - request response: {}", r.params.len());
-                                        let mut r_body = r.params; 
-                                        if let Some(query)  = query {
-                                            if query.ends_with("electrico_hostpage=true") {
-                                                let mut host_page_html = String::from_utf8(r_body).expect("host page utf-8 failed");
-                                                for p in protocols {
-                                                    if let Some(_) = host_page_html.find(format!("{p}:").as_str()) {
-                                                        host_page_html = host_page_html.replace(format!("{p}:").as_str(), format!("*.localhost:{port}").as_str());
+                                    if let Ok(r) = timeout(Duration::from_secs(30), req_receiver.recv()).await {
+                                        if let Some(r) = r {
+                                            trace!("http - request response: {}", r.params.len());
+                                            let mut r_body = r.params; 
+                                            if let Some(query)  = query {
+                                                if query.ends_with("electrico_hostpage=true") {
+                                                    let mut host_page_html = String::from_utf8(r_body).expect("host page utf-8 failed");
+                                                    for p in protocols {
+                                                        if let Some(_) = host_page_html.find(format!("{p}:").as_str()) {
+                                                            host_page_html = host_page_html.replace(format!("{p}:").as_str(), format!("*.localhost:{port}").as_str());
+                                                        }
                                                     }
+                                                    r_body = host_page_html.as_bytes().to_vec();
                                                 }
-                                                r_body = host_page_html.as_bytes().to_vec();
                                             }
+                                            return Ok::<_, Error>(Response::builder()
+                                                .header("Content-Type", r.mime_type)
+                                                .header(ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                                                .status(r.status)
+                                                .body(Full::new(Bytes::from(r_body))).expect("http body full failed"));
+                                        } else {
+                                            error!("http - request no response:{url2}");
                                         }
-                                        return Ok::<_, Error>(Response::builder()
-                                            .header("Content-Type", r.mime_type)
-                                            .header(ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-                                            .status(r.status)
-                                            .body(Full::new(Bytes::from(r_body))).expect("http body full failed"));
                                     } else {
                                         error!("http - request timed out:{url2}");
                                     }
@@ -249,7 +253,9 @@ impl Frontend {
                     }
                 }
             } else {
-                let _ = sender.send(IPCResponse::new("data error".to_string().as_bytes().to_vec(), CONTENT_TYPE_TEXT.to_string(), StatusCode::BAD_GATEWAY));
+                thread::spawn(move || {
+                    let _ = sender.blocking_send(IPCResponse::new("data error".to_string().as_bytes().to_vec(), CONTENT_TYPE_TEXT.to_string(), StatusCode::BAD_REQUEST));
+                });
             }
         }
         

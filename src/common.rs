@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fs::{self, File}, path::{Path, PathBuf}, str::FromStr};
+use std::{collections::HashMap, fs::{self, File}, path::{Path, PathBuf}, thread::{self}};
 
 use include_dir::{include_dir, Dir};
 use queues::{IsQueue, Queue};
@@ -175,6 +175,12 @@ pub fn escape(s:&String) -> String {
     s.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n").replace("\r", "\\r")
 }
 
+fn respond_http(sender: tokio::sync::mpsc::Sender<IPCResponse>, body:Vec<u8>, content_type: String, status:StatusCode) {
+    thread::spawn(move || {
+        let _ = sender.blocking_send(IPCResponse::new(body, content_type, status));
+    });
+}
+
 pub fn respond_ok(responder:Responder) {
     let body = Vec::from("OK".to_string().as_bytes());
     match responder {
@@ -186,7 +192,7 @@ pub fn respond_ok(responder:Responder) {
                 .body(body).unwrap());
         },
         Responder::HttpProtocol { sender } => {
-            let _ = sender.send(IPCResponse::new(body, CONTENT_TYPE_HTML.to_string(),StatusCode::OK));
+            respond_http(sender, body, CONTENT_TYPE_HTML.to_string(), StatusCode::OK);
         }
     }
 }
@@ -202,7 +208,7 @@ pub fn respond_404(responder:Responder) {
                 .body(body).unwrap());
         },
         Responder::HttpProtocol { sender } => {
-            let _ = sender.send(IPCResponse::new(body, CONTENT_TYPE_HTML.to_string(),StatusCode::NOT_FOUND));
+            respond_http(sender, body, CONTENT_TYPE_HTML.to_string(), StatusCode::NOT_FOUND);
         }
     }
 }
@@ -217,7 +223,7 @@ pub fn respond_status(status:StatusCode, content_type: String, body:Vec<u8>, res
                 .body(body).unwrap());
         },
         Responder::HttpProtocol { sender } => {
-            let _ = sender.send(IPCResponse::new(body, content_type,StatusCode::from_str(status.as_str()).expect("StatusCode from_str failed")));
+            respond_http(sender, body, content_type, status);
         }
     }
 }
@@ -232,7 +238,7 @@ pub fn respond_client_error(error:String, responder:Responder) {
                 .body(Vec::from(error.as_bytes())).unwrap());
         },
         Responder::HttpProtocol { sender } => {
-            let _ = sender.send(IPCResponse::new(Vec::from(error.as_bytes()), CONTENT_TYPE_TEXT.to_string(),StatusCode::BAD_REQUEST));
+            respond_http(sender, Vec::from(error.as_bytes()), CONTENT_TYPE_TEXT.to_string(), StatusCode::BAD_REQUEST);
         }
     }
 }

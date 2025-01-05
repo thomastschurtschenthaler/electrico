@@ -100,7 +100,7 @@ pub enum FrontendCommand {
 
 pub enum Responder {
   CustomProtocol {responder:RequestAsyncResponder},
-  HttpProtocol {sender:std::sync::mpsc::Sender<IPCResponse>}
+  HttpProtocol {sender:Sender<IPCResponse>}
 }
 
 pub enum ElectricoEvents {
