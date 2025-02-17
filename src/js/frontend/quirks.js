@@ -35,8 +35,10 @@
                     if (v.startsWith(p+"://")) {
                         let ix = v.indexOf(":");
                         let url_post = v.substring(ix+3);
-                        let url = v.substring(0, ix)+"/"+url_post;
+                        let protocol = v.substring(0, ix);
+                        let url = protocol+"/"+url_post;
                         if (this instanceof HTMLIFrameElement) {
+                            window.__custom_iframe_protocol = protocol;
                             v = "http://"+url_post.substring(0, url_post.indexOf("/"))+".localhost:"+window.location.port+"/"+window.__http_protocol.http_uid+"@"+url;
                         } else {
                             v = "http://"+window.location.hostname+":"+window.location.port+"/"+window.__http_protocol.http_uid+"@"+url;
@@ -66,8 +68,8 @@
         let styles = document.querySelectorAll("style");
         styles.forEach(style => {
             for (let p of getProtocols()) {
-                if (style.textContent.indexOf(p+"://")>=0) {
-                    style.textContent = style.textContent.replaceAll(p+"://", "http://"+window.location.hostname+":"+window.location.port+"/"+window.__http_protocol.http_uid+"@"+p+"/");
+                if (style.textContent.indexOf(p+"\\:\\/\\/")>=0) {
+                    style.textContent = style.textContent.replaceAll(p+"\\:\\/\\/", "http://"+window.location.hostname+":"+window.location.port+"/"+window.__http_protocol.http_uid+"@"+p+"/");
                 }
             }
         });

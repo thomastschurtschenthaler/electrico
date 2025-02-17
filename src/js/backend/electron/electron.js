@@ -102,7 +102,15 @@
                         } else {
                             msg = msg.data._electrico_args;
                         }
-                        $e_electron.syncChannelSendMessage({"id":this._e_id, "rid":rid, "channel":channel, "args":JSON.stringify(msg)}, data_blob);
+                        let action = {"action":"Electron", "invoke":{"command":"ChannelSendMessage", "id":this._e_id, "channel":channel, "args":JSON.stringify(msg)}};
+                        let action_msg = {"command": action, "data_blob":data_blob!=null};
+                        window.__ipc_websocket("ipc", false, null, null, (socket)=>{
+                            let msg = (new TextEncoder()).encode(JSON.stringify(action_msg));
+                            socket.send(msg);
+                            if (data_blob!=null) {
+                                socket.send(data_blob);
+                            }
+                        });
                     }, {
                         deserialize:(msg, cb) => {cb(msg)},
                         serialize:(msg, cb) => {cb(msg)}
@@ -128,7 +136,24 @@
                     let _postMessage = this.postMessage;
                     this.postMessage = (channel, message, ports) => {
                         if (ports!=null && ports.length>0) {
-                            console.log("WebContentsCls.postMessage ports", ports);
+                            ports.map((p) => {
+                                if (p.connected_port!=null) {
+                                    if (p.connected_port._posted_remote!=null) {
+                                        let cmsg = {id:p.id, remote_id:p.connected_port.id, clientid:p.connected_port._posted_remote.clientid, hook:p.connected_port._posted_remote.hook};
+                                        _postMessage({channel:"__posted_remote_connect_hook", message:cmsg});
+                                        delete p.connected_port._posted_remote;
+                                    } else {
+                                        p._posted_renderer = {
+                                            connect_hook: function(clientid, hook) {
+                                                console.log("connect_hook");
+                                                let cmsg = {id:p.id, remote_id:p.connected_port.id, clientid:clientid, hook:hook};
+                                                _postMessage({channel:"__posted_remote_connect_hook", message:cmsg});
+                                                delete p._posted_renderer.connect_hook;
+                                            }
+                                        };
+                                    }
+                                }
+                            });
                         }
                         _postMessage({channel:channel, message:message}, ports);
                     };
@@ -289,6 +314,10 @@
             this.isVisible = (() => {
                 return true;
             }).bind(this);
+            this.getNativeWindowHandle = (() => {
+                return Buffer.from(this._e_id);
+            }).bind(this);
+            
             window.__electrico.browser_window[this._e_id]=this;
             this.config.title = this.config.title || "Electrico Window";
             this.config.resizable = this.config.resizable!=null?this.config.resizable:true;
@@ -527,35 +556,66 @@
                     constructor() {
                         super();
                         this.pending_ports=[];
-                        let queue=[];
+                        this.clientid = uuidv4();
+                        console.log("this.clientid", this.clientid);
+                        let _this = this;
                         this.sender = (function(data) {
-                            queue.push(data);
-                            let doSend = (function() {
-                                if (this._forked) {
-                                    for (let d of queue) {
-                                        this.con.write(d);
-                                    }
-                                    queue=[];
-                                } else {
-                                    setTimeout(doSend, 200);
+                            window.__call_queue("UP"+this.clientid, (d)=>{
+                                if (_this._forked) {
+                                    let action = {"action":"PostIPC", "http_id":"fork", "from_backend":true, "request_id":"fork", "channel":_this.clientid, "params":"["+d.msg+"]"};
+                                    let action_msg = {"command": action, "data_blob":d.data_blob!=null};
+                                    window.__ipc_websocket(_this.clientid, false, null, this._fork_hook, (socket)=>{
+                                        let msg = (new TextEncoder()).encode(JSON.stringify(action_msg));
+                                        socket.send(msg);
+                                        if (d.data_blob!=null) {
+                                            socket.send(d.data_blob);
+                                        }
+                                    });
                                 }
-                            }).bind(this);
-                            doSend();
+                                return _this._forked;
+                            }, data);
                         }).bind(this);
                         this.flatten = (msg) => {
                             return msg.data;
                         }
-                        this.clientid = uuidv4();
                         this.sbuffer = new window.__electrico.SerializationBuffer(this.clientid);
-                        this.forked = (function() {
+                        this.forked = (function(hook) {
+                            console.log("forked", hook);
                             this._forked=true;
+                            this._fork_hook = hook;
                             for (let p of this.pending_ports) {
                                 delete p.pending;
                             }
                             delete this.pending_ports;
+                            const ipcMain = require("electron").ipcMain;
+                            ipcMain.on(this.clientid, (function(e, msg) {
+                                //console.log("server msg received", msg);
+                                this.onMessageReceived(msg);
+                            }).bind(this));
                             this.emit("spawn");
                         }).bind(this);
-                        window.__electrico.mainIPCServer.connect(this);
+                        let _postMessage = this.postMessage;
+                        this.postMessage = (data, ports, ...args) => {
+                            if (ports!=null && ports.length>0) {
+                                ports.map((p) => {
+                                    if (p.connected_port!=null) {
+                                        let connect_hook = function() {
+                                            if (_this._forked) {
+                                                if (p.connected_port._posted_renderer!=null) {
+                                                    p.connected_port._posted_renderer.connect_hook(_this.clientid, _this._fork_hook);
+                                                } else {
+                                                    p._posted_remote={clientid:_this.clientid, hook:_this._fork_hook}
+                                                }
+                                            } else {
+                                                setTimeout(connect_hook, 100);
+                                            }
+                                        };
+                                        connect_hook();
+                                    }
+                                });
+                            }
+                            _postMessage(data, ports, ...args);      
+                        };
                     }
                 }
                 uProc = new UtilityProcessCls();
@@ -572,7 +632,8 @@
                 if (moduleMain.startsWith("/")) moduleMain = moduleMain.substring(1);
                 options = options || {};
                 if (options.env==null) options.env = process.env;
-                let fork = {args:args, ...options, moduleSrc:moduleSrc, moduleMain:moduleMain, hook:window.__electrico.mainIPCServer.hook, clientid:uProc.clientid};
+                let main_hook = "ws://electrico.localhost:"+window.__http_protocol.http_port+"/"+window.__http_protocol.http_uid+"@asyncin/parent_"+process.pid;
+                let fork = {args:args, ...options, moduleSrc:moduleSrc, moduleMain:moduleMain, hook:main_hook, clientid:uProc.clientid};
                 fork.env = JSON.stringify(fork.env);
                 let e_args = ["-f", JSON.stringify(fork)];
                 if (options.execArgv!=null) {
@@ -583,7 +644,12 @@
                 let child = spawn(process.execPath, e_args);
                 uProc.stdout = child.stdout;
                 uProc.stderr = child.stderr;
-                
+                /*child.stderr.on("data", (msg)=>{
+                    console.log("Fork STDERR:"+(new TextDecoder()).decode(msg));
+                });
+                child.stdout.on("data", (msg)=>{
+                    console.log("Fork STDOUT"+(new TextDecoder()).decode(msg));
+                });*/
                 uProc.pid = child.pid;
                 let _child_emit = child.emit;
                 child.emit = function(...args) {
@@ -591,6 +657,16 @@
                     uProc.emit(...args);
                 }
                 uProc.kill = child.kill;
+                const ipcMain = require("electron").ipcMain;
+                (function(proc) {
+                    const initfork = function(e, msg) {
+                        console.log("fork initialized", proc.clientid, msg);
+                        ipcMain.removeListener(proc.clientid, initfork);
+                        proc.forked(msg.data.hook);
+                    };
+                    ipcMain.on(proc.clientid, initfork);
+                })(uProc);
+                console.log("process forked!!!!");
                 return uProc;
             }
         },
@@ -606,19 +682,16 @@
                         }
                         this.postMessage = ((data, ports) => {
                             if (this.started) {
-                                let start = (new Date()).getTime();
-                                let doSend = () => {
-                                    if (this.connected_port.send_locked) {
-                                        if ((new Date()).getTime()-start>60000) {
-                                            console.error("MessageChannelMain ChannelPort.postMessage send_locked timeout (1 min)");
-                                            return;
-                                        }
-                                        setTimeout(doSend, 200);
-                                        return;
+                                let _this = this;
+                                window.__call_queue("MC"+this.id, (msg)=>{
+                                    if (_this.connected_port.send_locked) {
+                                        console.log("send_locked!!");
+                                        return false;
+                                    } else {
+                                        _this.connected_port.emit("message", msg);
+                                        return true;
                                     }
-                                    this.connected_port.emit("message", {data:data, ports:ports});
-                                }
-                                doSend();
+                                }, {data, ports});
                             } else {
                                 console.error("postMessage ChannelPort not started", this.id);
                             }

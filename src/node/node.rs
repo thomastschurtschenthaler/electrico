@@ -78,13 +78,6 @@ pub fn process_node_command(tokio_runtime:&Runtime, app_env:&AppEnv,
                 }
             }
         },
-        NodeCommand::GetDataBlob { id} => {
-            if let Some(data) = backend.get_data_blob(id) {
-                respond_status(StatusCode::OK, CONTENT_TYPE_BIN.to_string(), data, responder);
-            } else {
-                respond_404(responder);
-            }
-        },
         NodeCommand::ExecuteSync { script } => {
             let (sender, receiver): (Sender<(bool, Vec<u8>)>, Receiver<(bool, Vec<u8>)>) = mpsc::channel();
             tokio_runtime.spawn(
@@ -107,6 +100,10 @@ pub fn process_node_command(tokio_runtime:&Runtime, app_env:&AppEnv,
             respond_ok(responder);
             backend.execute_sync_response(uuid, data, error);
         },
+        NodeCommand::ChannelSendMessage { channel, args } => {
+            respond_ok(responder);
+            backend.send_channel_message(channel, args, data_blob);
+        }
         NodeCommand::Api { data } => {
             apis::apis::process_command(tokio_runtime, app_env, proxy, backend, data, responder, data_blob); 
         },

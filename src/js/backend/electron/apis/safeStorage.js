@@ -60,7 +60,6 @@
             cb(e);
         }
     }
-    const { spawn } = require('node:child_process');
     let safeStorage = {
         isEncryptionAvailableAsync: async function() {
             return new Promise((res, rej)=> {

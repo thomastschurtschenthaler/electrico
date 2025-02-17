@@ -1,6 +1,6 @@
 var __electrico_nonce=null;
 (function() {
-    let wkeys = ['location', 'screen', '__is_windows', 'crypto', 'createWindow', 'setTimeout', 'setInterval', 'clearTimeout','clearInterval', 'fetch', '__init_shared', '__init_require', 'btoa', 'atob', 'performance', 'TextDecoder', 'TextEncoder'];
+    let wkeys = ['location', 'screen', '__is_windows', '__http_protocol', '__electrico_nonce', 'crypto', 'createWindow', 'setTimeout', 'setInterval', 'clearTimeout','clearInterval', 'fetch', '__init_shared', '__init_require', 'btoa', 'atob', 'performance', 'TextDecoder', 'TextEncoder'];
     for (let k in window) {
         if (!wkeys.includes(k)) {
             window[k]=()=>{};
@@ -12,8 +12,8 @@ var __electrico_nonce=null;
     let _setInterval=window.setInterval;
     let _clearTimeout=window.clearTimeout;
     let _clearInterval=window.clearInterval;
-    window.setTimeout = function(...args) {
-        let timer = _setTimeout(...args);
+    window.setTimeout = function(f, t, ...args) {
+        let timer = _setTimeout(f, t, ...args);
         return {
             _timer:timer,
             unref: () => {}
@@ -44,6 +44,9 @@ var __electrico_nonce=null;
     window.__init_shared(window);
     function createCMDRequest(async, name) {
         const req = new XMLHttpRequest();
+        if (async) {
+            req.timeout=600000;
+        }
         req.open("POST", window.__create_protocol_url("cmd://cmd/"+(name!=null?name:"execute")), async);
         return req;
     }
@@ -91,7 +94,10 @@ var __electrico_nonce=null;
                         body=cmdjson;
                     }
                     const req = new XMLHttpRequest();
-                    req.open("POST", window.__create_protocol_url("cmd://cmd/"+action+"."+call+(urlcmd!=null?("?"+encodeURIComponent(urlcmd)):"")), async);
+                    req.open("POST", window.__create_protocol_url("cmd://cmd/"+action+"."+call+(urlcmd!=null?("?"+encodeURIComponent(urlcmd)):""), (!async && bin)), async);
+                    if (async) {
+                        req.timeout=600000;
+                    }
                     if (bin) {
                         req.responseType = "arraybuffer";
                     }
@@ -215,24 +221,39 @@ var __electrico_nonce=null;
         app_menu:{},
         module_paths: {},
         module_cache: {},
+        ipc_connected: [],
+        sendChannelMessage: (channel, args, data) => {
+            if (channel == "ipc_connect") {
+                window.__electrico.ipc_connected.push(args);
+            } else if (channel.startsWith("ipc_")) {
+                args = JSON.parse(args);
+                window.__electrico.callIPCChannel(args.browser_window_id, args.request_id, channel.substring(4), args.params, data);
+            } else if (channel.startsWith("cp_data_")) {
+                let hook = "on_"+args;
+                window.__electrico.child_process.callback[hook](channel.substring(8), data);
+            } else if (channel.startsWith("cp_exit_")) {
+                window.__electrico.child_process.callback.on_close(channel.substring(8), args*1);
+            } else if (channel.startsWith("fsw_")) {
+                args = JSON.parse(args);
+                window.__electrico.fs_watcher.on_event(channel.substring(4), args.kind, args.filenames);
+            } else if (channel.startsWith("net_start_")) {
+                window.__electrico.net_server.callback.on_start(args, channel.substring(10));
+            } else if (channel.startsWith("net_data")) {
+                window.__electrico.net_server.callback.on_data(args, data);
+            } else if (channel.startsWith("net_end")) {
+                window.__electrico.net_server.callback.on_end(args);
+            }
+        },
         call: (f) => {
             setTimeout(f, 0);
             return "OK";
         },
         child_process: {
             callback: {
-                on_stdout: (pid) => {
-                    let Buffer = require('buffer').Buffer;
-                    let {r, e} = $e_node.syncGetDataBlobBin({"id":pid+"stdout"});
-                    if (e!=null) return;
-                    let bdata = Buffer.from(r);
+                on_stdout: (pid, bdata) => {
                     window.__electrico.child_process[pid].stdout.emit("data", bdata);
                 },
-                on_stderr: (pid) => {
-                    let Buffer = require('buffer').Buffer;
-                    let {r, e} = $e_node.syncGetDataBlobBin({"id":pid+"stderr"});
-                    if (e!=null) return;
-                    let bdata = Buffer.from(r);
+                on_stderr: (pid, bdata) => {
                     window.__electrico.child_process[pid].stderr.emit("data", bdata);
                 },
                 on_close: (pid, exit_code) => {
@@ -262,12 +283,9 @@ var __electrico_nonce=null;
                         server._connection_start(id);
                     }
                 },
-                on_data: (id) => {
+                on_data: (id, bdata) => {
                     let connection = window.__electrico.net_server[id];
                     if (connection!=null) {
-                        let Buffer = require('buffer').Buffer;
-                        let {r, e} = $e_node.syncGetDataBlobBin({"id":id});
-                        let bdata = Buffer.from(r);
                         connection.emit("data", bdata);
                     }
                 },
@@ -305,53 +323,40 @@ var __electrico_nonce=null;
             if (!main.startsWith("./")) {
                 main = "./"+main;
             }
-            function doLoadMain() {
-                if (window.__electrico.mainIPCServer.initialized) {
-                    require(main);
-                } else {
-                    setTimeout(doLoadMain, 0);
-                }
-            }
-            doLoadMain();
+            require(main);
+            //setTimeout(doLoadMain, 1000);
         },
-        callIPCChannel: (browserWindowID, requestID, argumentsstr) => {
-            setTimeout(()=>{
-                let arguments = JSON.parse(argumentsstr);
-                let channel = arguments[0];
-                let resp = null;
-                delete window.__electrico.error;
-                let timeout = {
-                    "cleared": false,
-                    trigger: function() {
-                        if (!timeout.cleared) {
-                            if (resp==null && window.__electrico.error!=null) {
-                                console.error("callChannel script error", channel, window.__electrico.error);
-                                delete window.__electrico.error;
-                                sendIPCResponse(requestID, null);
-                            } else {
-                                setTimeout(timeout.trigger, 1000);
-                            }
+        callIPCChannel: (browserWindowID, requestID, channel, argumentsstr, data) => {
+            let arguments = JSON.parse(argumentsstr);
+            
+            let resp = null;
+            delete window.__electrico.error;
+            let timeout = {
+                "cleared": false,
+                trigger: function() {
+                    if (!timeout.cleared) {
+                        if (resp==null && window.__electrico.error!=null) {
+                            console.error("callChannel script error", channel, window.__electrico.error);
+                            delete window.__electrico.error;
+                            sendIPCResponse(requestID, null);
+                        } else {
+                            setTimeout(timeout.trigger, 1000);
                         }
                     }
-                };
-                setTimeout(timeout.trigger, 1000);
-                let doCall = () => {
-                    let event = callChannel(timeout, browserWindowID, requestID, ...arguments);
-                    if (event.returnValue!=null) {
-                        resp=event.returnValue;
-                    }
-                };
-                if (arguments.length>1 && arguments[1]._electrico_buffer_id!=null) {
-                    $e_node.asyncGetDataBlobBin({"id":arguments[1]._electrico_buffer_id}).then((e, r)=>{
-                        let Buffer = require('buffer').Buffer;
-                        arguments[1] = Buffer.from(r);
-                        doCall();
-                    });
-                } else {
-                    doCall();
                 }
-            }, 0);
-            return "OK";
+            };
+            setTimeout(timeout.trigger, 1000);
+            if (arguments.length>0) {
+                if (arguments[0]._electrico_buffer_id!=null) {
+                    arguments[0] = data;
+                } else if (data!=null) {
+                    arguments[0].data = data;
+                }
+            }
+            let event = callChannel(timeout, browserWindowID, requestID, channel, ...arguments);
+            if (event.returnValue!=null) {
+                resp=event.returnValue;
+            }
         },
         getIPCChannelSyncResponse: () => {
             return window.__electrico.ipcChannelSyncResponse;
@@ -388,81 +393,21 @@ var __electrico_nonce=null;
     class SerializationBuffer {
         constructor(clientid) {
             this.clientid=clientid;
-            this.LENGTH_BYTES = 8;
-            this.buffers = [];
-            this.actmsg=null;
             this.deserialize = (function(data, cb) {
-                let Buffer = require('buffer').Buffer;
-                this.buffers.push(data);
-                let mdata = this.buffers.length>1?Buffer.concat(this.buffers):(this.buffers.length>0?this.buffers[0]:null);
-                let pos=0; let cnt=0;
-                while (true) {
-                    cnt++;
-                    if (this.actmsg==null) {
-                        let p2 = pos+this.LENGTH_BYTES;
-                        if (mdata.length>=p2) {
-                            this.actmsg = {l_msgjson:Number(mdata.subarray(pos, pos+this.LENGTH_BYTES).readBigInt64LE())};
-                            pos = p2;
-                        } else {
-                            break;
-                        }
-                    }
-                    if (this.actmsg.msgjson==null) {
-                        let p2 = pos+this.actmsg.l_msgjson;
-                        if (mdata.length>=p2) {
-                            try {
-                                this.actmsg.msgjson=JSON.parse(mdata.subarray(pos, p2).toString());
-                            } catch (e) {
-                                console.error("SerializationBuffer.msgjson error parsing JSON", e);
-                                throw e;
-                            }
-                            pos = p2;
-                        } else {
-                            break;
-                        }
-                    }
-                    if (this.actmsg.msgjson.l_bindata!=null) {
-                        let p2 = pos+this.actmsg.msgjson.l_bindata;
-                        if (mdata.length>=p2) {
-                            this.actmsg.msgjson.data=mdata.subarray(pos, p2);
-                            delete this.actmsg.msgjson.l_bindata;
-                            pos = p2;
-                            cb(this.actmsg.msgjson);
-                            this.actmsg=null;
-                        } else {
-                            break;
-                        }
-                    } else {
-                        cb(this.actmsg.msgjson);
-                        this.actmsg=null;
-                    }
+                let msg = JSON.parse(data.msg);
+                if (data.data_blob!=null) {
+                    msg.data = data.data_blob;
                 }
-                if (pos<mdata.length) {
-                    this.buffers = [mdata.subarray(pos, mdata.length)];
-                } else {
-                    this.buffers = [];
-                }
+                cb(msg);
             }).bind(this);
             this.serialize = (function(msg, cb) {
                 let Buffer = require('buffer').Buffer;
                 let bindata = null;
                 if (Buffer.isBuffer(msg.data)) {
                     bindata = msg.data;
-                    msg.l_bindata = bindata.length;
                     delete msg.data;
                 }
-                let msgjson = Buffer.from(JSON.stringify(msg));
-                let msglength = Buffer.alloc(this.LENGTH_BYTES);
-                msglength.writeBigInt64LE(BigInt(msgjson.length));
-                /*let bytes = msgjson.length+"";
-                let msglength = Buffer.from(bytes + (new Array(this.LENGTH_BYTES-bytes.length+1).join(" ")));*/
-                
-                let data = null;
-                if (bindata!=null) {
-                    data = Buffer.concat([msglength, msgjson, bindata]);
-                } else {
-                    data = Buffer.concat([msglength, msgjson]);
-                }
+                let data = {msg:JSON.stringify(msg), portid:msg.portid, data_blob:bindata};
                 cb(data);
             }).bind(this);
         }
@@ -479,13 +424,15 @@ var __electrico_nonce=null;
             let _this=this;
             let __postMessage = (data, ports, portid, retry) => {
                 ports = ports || [];
-                ports.map((p) => {p.send_locked=true});
-                if (ports.filter(p=>{return p.connected_port!=null && p.connected_port.pending}).length>0) {
-                    setTimeout(()=>{__postMessage(data, ports, portid, true)}, 50);
-                    return;
-                }
-                if (retry) {
-                    setTimeout(()=>{__postMessage(data, ports, portid)}, 100);
+                if (!retry) {
+                    ports.map((p) => {p.send_locked=true});
+                    window.__call_queue("PPP"+_this.id, (msg)=>{
+                        if (ports.filter(p=>{return p.connected_port!=null && p.connected_port.pending}).length>0) {
+                            return false;
+                        }
+                        __postMessage(msg.data, msg.ports, msg.portid, true);
+                        return true;
+                    }, {data, ports, portid});
                     return;
                 }
                 let mports = ports.map((p) => {
@@ -503,7 +450,8 @@ var __electrico_nonce=null;
                     p.on("message", (msg) => {
                         _this.__postMessage(msg.data, msg.ports, p.id);
                     });
-                    return {"id":p.id};
+                    let mport = {"id":p.id};
+                    return mport
                 });
                 let msg = {portid:portid!=null?portid:_this.id, data:data, ports:mports};
                 _this.sbuffer.serialize(msg, (data)=>{
@@ -523,21 +471,20 @@ var __electrico_nonce=null;
                 if (msg.portid!=null && _this.neutered_ports[msg.portid]!=null) {
                     _this.neutered_ports[msg.portid].postMessage(msg.data, msg.ports);
                 } else {
-                    let emit = () => {
+                    window.__call_queue("PPE"+_this.id, (msg)=>{
                         let eport = msg.portid!=null?_this.received_ports[msg.portid]:_this;
                         if (eport==null) {
                             console.log("ProcessPort.onMessageReceived no port received for portid yet", msg.portid);
-                            setTimeout(emit, 100);
-                            return;
+                            return false;
                         }
                         delete msg.portid;
                         if (eport.started) {
                             eport.emit("message", _this.flatten!=null?_this.flatten(msg):msg);
                         } else {
-                            console.error("port not started!");
+                            console.error("port not started!", eport);
                         }
-                    }
-                    emit();
+                        return true;
+                    }, msg);
                 }
             }
             this.ondata = (data) => {
@@ -556,31 +503,36 @@ var __electrico_nonce=null;
     window.__electrico.ProcessPort=ProcessPort;
     let init_fork = function(hook, clientid, envstr) {
         window.__electrico.parent_connected=true;
-        //console.log("init_fork", hook, clientid, envstr);
         let env = JSON.parse(envstr);
         for (let k in env) {
             process.env[k] = env[k];
         }
-        let { createConnection } = require('net');
-        let con = createConnection(hook, () => {
-            console.warn("init_fork clientid", clientid); con.write(clientid);
-        });
-        con.on("error", (e)=>{
-            console.error("init_fork client connection error", e);
-        });
-        con.on('end', () => {
-            window.__electrico.parent_connected=false;
-            console.log("init_fork client connection ended");
-        });
         let sbuffer = new SerializationBuffer(clientid);
         let parentPort = new ProcessPort((data) => {
-            con.write(data);
+            let action = {"action":"PostIPC", "http_id":"fork", "from_backend":true, "request_id":data.portid!=null?data.portid:"fork", "channel":clientid, "params":"["+data.msg+"]"};
+            let action_msg = {"command": action, "data_blob":data.data_blob!=null};
+            let ws_hook = hook;
+            if (data.portid != null && window.__electrico.ipc_connected.includes(data.portid)) {
+                ws_hook = null;
+            }
+            window.__ipc_websocket("ipc", false, null, ws_hook, (socket)=>{
+                let msg = (new TextEncoder()).encode(JSON.stringify(action_msg));
+                socket.send(msg);
+                if (data.data_blob!=null) {
+                    socket.send(data.data_blob);
+                }
+            });
         }, sbuffer);
-        window.__electrico.parentPort=parentPort;
         parentPort.start();
-        con.on('data', (data) => {
-            parentPort.ondata(data);
-        });
+        /*window.__ipc_websocket("ipc", false, null, hook, (socket)=>{
+            
+        });*/
+        
+        window.__electrico.parentPort=parentPort;
+        const ipcMain = require("electron").ipcMain;
+        ipcMain.on(clientid, (function(e, msg) {
+            parentPort.onMessageReceived(msg);
+        }).bind(this));
         parentPort.send = function(message, sendHandle, options, callback) {
             if (callback==null) {
                 callback=sendHandle;
@@ -600,67 +552,13 @@ var __electrico_nonce=null;
                 process.emit(...args);
             }
         }
+        let fork_hook = "ws://electrico.localhost:"+window.__http_protocol.http_port+"/"+window.__http_protocol.http_uid+"@asyncin/fork_"+process.pid;
+        parentPort.postMessage({"hook":fork_hook});
     };
     window.__electrico.init_fork=init_fork;
-
-    let mainIPCServer =  {
-        init: function() {
-            const {app} = require('electron/main');
-
-            let { createServer } = require('net');
-            server = createServer();
-            let err = (e)=>{
-                console.error("mainIPCServer server error", e);
-            };
-            server.on('error', err);
-            this.hook = app.getPath("temp")+"/"+window.__uuidv4();
-            console.warn("mainIPCServer hook", this.hook, new Date());
-            if (this.hook.length>100) {
-                this.hook = this.hook.substring(0, 100);
-            }
-            let _this=this;
-            server.listen(this.hook, () => {
-                server.removeListener('error', err);
-                server.on("connection", (con)=>{
-                    console.log("mainIPCServer got connection", con, new Date());
-                    let proc = null;
-                    con.on('end', () => {
-                        console.log("mainIPCServer client connection ended", proc);
-                    });
-                    con.on('data', (data) => {
-                        if (proc==null) {
-                            let clientid = data.toString();
-                            console.log("mainIPCServer got clientid", clientid, new Date());
-                            proc = _this.procs[clientid];
-                            if (proc==null) {
-                                console.error("mainIPCServer server not connected to process - clientid:", clientid);
-                            } else {
-                                proc.con=con;
-                                proc.forked();
-                            }
-                            return;
-                        }
-                        proc.ondata(data);
-                    });
-                    con.on("error", (e)=>{
-                        console.error("mainIPCServer server error", e);
-                    });
-                });
-            });
-            this.initialized=true;
-        },
-        procs: {},
-        connect: function (proc) {
-            this.procs[proc.clientid]=proc;
-        }
-    };
-    //mainIPCServer.init();
-    setTimeout(()=>{mainIPCServer.init();}, 0);
-    window.__electrico.mainIPCServer=mainIPCServer;
-
     window.__electrico.contentsPostMessage = function(channel, message, ports) {
         ports = ports || [];
-        $e_electron.asyncChannelSendMessage({"id":this._e_id, "rid":window.__uuidv4(), "channel":channel, "args":JSON.stringify(message)});
+        $e_electron.asyncChannelSendMessage({"id":this._e_id, "channel":channel, "args":JSON.stringify(message)});
     };
     let _process = null;
     var process=new Proxy(new EventEmitter(), {
@@ -740,3 +638,23 @@ var __electrico_nonce=null;
 })();
 require("./node/node.js");
 require("./electron/electron.js");
+Error.captureStackTrace = (o)=> {
+    let e = {
+        getFileName: () => {
+            return null;
+        },
+        getLineNumber: () => {
+            return 1;
+        },
+        getColumnNumber: () => {
+            return 1;
+        },
+        isEval: () => {
+            return false;
+        },
+        getFunctionName: () => {
+            return "dummy";
+        }
+    };
+    o.stack=[e,e,e];
+};

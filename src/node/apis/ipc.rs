@@ -40,7 +40,7 @@ pub fn ipc_server(
                                 match rc {
                                     Ok(c) => {
                                         let id = Uuid::new_v4().to_string();
-                                        trace!("ipc listener connection start id {}", id);
+                                        debug!("ipc listener connection start id {}", id);
                                         let (sender, receiver): (Sender<NETConnection>, Receiver<NETConnection>) = mpsc::channel(100);
                                         let _ = send_command(&s_proxy, &s_command_sender, BackendCommand::NETServerConnStart { hook: s_hook.clone(), id:id.clone(), sender:sender});
                                         ipc_connect(&id, c, receiver, proxy.clone(), command_sender.clone());
@@ -117,7 +117,7 @@ fn ipc_connect(id:&String, c:interprocess::local_socket::tokio::Stream,
     let r_command_sender = command_sender.clone();
     let r_id=id.clone();
 
-    let (mut reader, mut writer) = c.split();
+    let (reader, mut writer) = c.split();
     //let mut bw = BufWriter::new(writer);
     let mut br = BufReader::new(reader);
     let w_proxy = proxy.clone();
@@ -134,7 +134,7 @@ fn ipc_connect(id:&String, c:interprocess::local_socket::tokio::Stream,
                 Ok(r) => {
                     if let Some(r) =r {
                         match r {
-                            NETConnection::Write { data } => {
+                            NETConnection::Write { data, end } => {
                                 trace!("NETConnection::Write {}: {}", w_id, data.len());
                                 time_idle = SystemTime::now();
                                 let _ = writer.write_all(&data.to_vec()).await;

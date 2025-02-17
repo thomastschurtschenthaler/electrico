@@ -1,5 +1,5 @@
 (function() {
-    let initscript = function(document) {
+    let initscript = function(document, __electrico_nonce) {
         let ipcRenderer = null;
         let _XMLHttpRequest = XMLHttpRequest;
         var window=document.window;
@@ -44,23 +44,38 @@
             req.open("POST", window.__create_protocol_url(create_ipc_url("send")), false);
             req.send(JSON.stringify({"action": "Alert", "message": msg}));
         }
-        function sendIPC(request_id, nonce, async, ...args) {
+        
+
+        function sendIPC(request_id, nonce, async, ws, channel, ...args) {
             let Buffer = require('buffer').Buffer;
-            const req = new _XMLHttpRequest();
+            
             let data_blob = null;
-            let channel = args[0];
-            if (args.length>1 && (Buffer.isBuffer(args[1]) || args[1] instanceof Uint8Array)) {
-                data_blob=args[1];
-                args[1]={_electrico_buffer_id:request_id};
+            if (args.length>0 && (Buffer.isBuffer(args[0]) || args[0] instanceof Uint8Array)) {
+                data_blob=args[0];
+                args[0]={_electrico_buffer_id:request_id};
             }
-            let action = JSON.stringify({"action":"PostIPC", "request_id":request_id, "nonce": nonce, "params":JSON.stringify(args)});
+            let action = JSON.stringify({"action":"PostIPC", "request_id":request_id, "data_blob":data_blob!=null, "nonce": nonce, "channel":channel, "params":JSON.stringify(args)});
+            if (ws) {
+                window.__ipc_websocket("ipc", false, nonce, null, (socket)=>{
+                    let msg = (new TextEncoder()).encode(action);
+                    socket.send(msg);
+                    if (data_blob!=null) {
+                        socket.send(data_blob);
+                    }
+                });
+                return;
+            }
+            let req = new _XMLHttpRequest();
+            if (async) {
+                req.timeout=600000;
+            }
             req.open("POST", window.__create_protocol_url(create_ipc_url("ipc."+channel+(data_blob!=null?("?"+encodeURIComponent(action)):""))), async);
             req.send(data_blob!=null?data_blob:action);
             if (!async && req.status!=200) {
                 console.log("sendIPC sync error", req.status, channel);
             }
             return req;
-       }
+        }
         let uuidv4 = window.__uuidv4;
         function processi(nonce) {
             let _processInfo=null;
@@ -116,11 +131,11 @@
                     this.nonce=nonce;
                 }
                 send(...args) {
-                    sendIPC(uuidv4(), this.nonce, true, ...args);
+                    sendIPC(uuidv4(), this.nonce, true, true, ...args);
                 }
                 sendSync(...args) {
                     window.__electrico.ipcSyncResponse=null;
-                    let req = sendIPC(uuidv4(), this.nonce, false, ...args);
+                    let req = sendIPC(uuidv4(), this.nonce, false, false, ...args);
                     if (req.readyState == 4 && req.status == 200) {
                         return JSON.parse(req.responseText);
                     }
@@ -129,7 +144,7 @@
                 }
                 invoke(...args) {
                     return new Promise(resolve => {
-                        let req = sendIPC(uuidv4(), this.nonce, true, ...args);
+                        let req = sendIPC(uuidv4(), this.nonce, true, false, ...args);
                         req.onreadystatechange = function() {
                             if (this.readyState == 4) {
                                 if (req.status == 200) {
@@ -169,11 +184,12 @@
             }
             return _electron_i[nonce];
         };
-        electron = {
+        const electron = {
             __init_electrico_nonce: (nonce) => {
                 return _electron(nonce);
             }
-        }
+        };
+        const remote_hooks = {}; 
         window.__electrico={
             module_paths: {},
             module_cache: {},
@@ -193,65 +209,91 @@
                 }
                 return lib;
             },
-            sendChannelMessage: (rid, channel, argumentsstr) => {
-                setTimeout(()=>{
-                    let args = JSON.parse(argumentsstr);
-                    if (args.posted) {
-                        let doCall = () => {
-                            if (args.portid!=null) {
-                                let port = window.__electrico.received_ports[args.portid];
+            sendChannelMessage: (channel, arguments, data) => {
+                let args = (typeof arguments == 'object')?arguments:JSON.parse(arguments);
+                if (data!=null) args.data = data;
+                if (channel=="__posted_remote_connect_hook") {
+                    remote_hooks[args.data.id] = args.data;
+                    const remote_out_hook = args.data.hook.replace("asyncin", "asyncout/"+args.data.remote_id)+"_out";
+                    const local_port_id = args.data.id;
+                    window.__ipc_websocket("ipc", true, null, remote_out_hook, 
+                        window.__ipc_websocket_messagehandler((channel, args, data) => {
+                            const msg = JSON.parse(JSON.parse(args).params)[0];
+                            msg.portid = local_port_id;
+                            msg.posted = true;
+                            window.__electrico.sendChannelMessage(channel, msg, data);
+                        }),
+                        (socket)=>{});
+                    return;
+                }
+                if (args.posted) {
+                    if (args.portid!=null) {
+                        window.__call_queue(args.portid, (args)=>{
+                            let port = window.__electrico.received_ports[args.portid];
+                            if (port!=null) {
                                 port.postMessage(args.data);
-                            } else {
-                                let ports = args.ports.map((p) => {
-                                    let mchannel = new MessageChannel();
-                                    let port = mchannel.port1;
-                                    port.onmessage = function(e) {
-                                        sendIPC(uuidv4(), ipcRenderer.nonce, true, p.id, e.data);
-                                    };
-                                    window.__electrico.received_ports[p.id] = port;
-                                    let _postMessage=mchannel.port2.postMessage;
-                                    mchannel.port2.postMessage = (...args) => {
-                                        _postMessage.bind(mchannel.port2)(...args);
-                                    }
-                                    return mchannel.port2;
-                                });
-                                if (args.fromWebContents) {
-                                    let send = {"sender":ipcRenderer, "ports": ports};
-                                    ipcRenderer.emit(channel, send, args.data);
-                                } else {
-                                    let event = new MessageEvent("message", {"ports":ports});
-                                    event.data=args.data;
-                                    ipcRenderer.emit(channel, event);
-                                }
                             }
-                        }
-                        if (args.data._electrico_buffer_id!=null) {
-                            const req = new XMLHttpRequest();
-                            req.open("POST", window.__create_protocol_url(create_ipc_url("getdatablob")), true);
-                            req.responseType = "arraybuffer";
-                            req.send(JSON.stringify({"action":"GetDataBlob", "id":args.data._electrico_buffer_id}));
-                            req.onreadystatechange = function() {
-                                if (this.readyState == 4) {
-                                    if (req.status == 200) {
-                                        args.data = Buffer.from(req.response);
-                                        doCall();
-                                    }
-                                }
-                            };
-                        } else {
-                            doCall();
-                        }
+                            return port!=null;
+                        }, args);
                     } else {
-                        let send = {"sender":ipcRenderer, "ports": []};
-                        ipcRenderer.emit(channel, send, ...args);
+                        let ports = args.ports.map((p) => {
+                            let mchannel = new MessageChannel();
+                            let port = mchannel.port1;
+                            port.onmessage = function(e) {
+                                if (remote_hooks[p.id]!=null) {
+                                    let data_blob = null; let data = e.data;
+                                    if (Buffer.isBuffer(data) || data instanceof Uint8Array) {
+                                        data_blob=e.data;
+                                        data={};
+                                    }
+                                    let msg = {portid:remote_hooks[p.id].remote_id, data:data, ports:[]};
+                                    let action = {"action":"PostIPC", "http_id":"remote", "from_backend":true, "request_id":"remote", "nonce": null, "channel":remote_hooks[p.id].clientid, "params":JSON.stringify([msg])};
+                                    let action_msg = {"command": action, "data_blob":data_blob!=null};
+                                    window.__ipc_websocket("ipc", false, null, remote_hooks[p.id].hook+"_in", (socket)=>{
+                                        let msg = (new TextEncoder()).encode(JSON.stringify(action_msg));
+                                        socket.send(msg);
+                                        if (data_blob!=null) {
+                                            socket.send(data_blob);
+                                        }
+                                    });
+                                } else {
+                                    sendIPC(uuidv4(), ipcRenderer.nonce, true, true, p.id, e.data);
+                                }  
+                            };
+                            window.__electrico.received_ports[p.id] = port;
+                            let _postMessage=mchannel.port2.postMessage;
+                            mchannel.port2.postMessage = (...args) => {
+                                _postMessage.bind(mchannel.port2)(...args);
+                            }
+                            return mchannel.port2;
+                        });
+                        if (args.fromWebContents) {
+                            let send = {"sender":ipcRenderer, "ports": ports};
+                            //console.error("fromWebContents", channel, send, args);
+                            ipcRenderer.emit(channel, send, args.data);
+                        } else {
+                            let event = new MessageEvent("message", {"ports":ports});
+                            event.data=args.data;
+                            ipcRenderer.emit(channel, event);
+                        }
                     }
-                }, 0);
-                return "OK";
+                } else {
+                    let send = {"sender":ipcRenderer, "ports": []};
+                    ipcRenderer.emit(channel, send, ...args);
+                }
             },
             addArgument: (arg) => {
                 window.__electrico.add_args.push(arg);
             }
         };
+        function getProtocol() {
+            let loc = window.location.href;
+            let i1 = loc.indexOf("@");
+            if (i1<0) return null;
+            let i2 = loc.indexOf("/", i1+1);
+            if (i2<0) return null;
+            return loc.substring(i1+1, i2);
+        }
         let _addEventListener = window.addEventListener;
         //setTimeout(()=>{
             window.__electrico_preload(document, {
@@ -264,8 +306,25 @@
                         })
                     };
                 },
-                after: () => {
-                    window.addEventListener=_addEventListener;
+                after: () => {   
+                    window.addEventListener = (e, h, o) => {
+                        if (e=="message") {
+                            let _h=h;
+                            h = function(e) {
+                                _h(new Proxy(e, {
+                                    get(target, prop, receiver) {
+                                        if (prop=="origin") {
+                                            let i1 = e.origin.indexOf("://");
+                                            let i2 = e.origin.indexOf(".localhost", i1);
+                                            return window.__custom_iframe_protocol+e.origin.substring(i1, i2);
+                                        }
+                                        return target[prop];
+                                    }
+                                }));
+                            }
+                        }
+                        _addEventListener(e, h, o);
+                    };
                     window.process=processi(null);
                 }
             });
@@ -310,7 +369,7 @@
         init_iframes(__electrico_nonce);
     }
     document.window=window;
-    initscript(document);
+    initscript(document, __electrico_nonce);
     if (window.__http_protocol!=null) {
         require("./quirks.js");
     }

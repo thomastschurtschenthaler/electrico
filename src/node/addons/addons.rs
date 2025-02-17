@@ -2,7 +2,6 @@ use log::{debug, error};
 use serde_json::Error;
 use tao::event_loop::EventLoopProxy;
 use tokio::runtime::Runtime;
-use wry::RequestAsyncResponder;
 
 use crate::{backend::Backend, common::respond_404, node::node::AppEnv, types::{ElectricoEvents, Responder}};
 

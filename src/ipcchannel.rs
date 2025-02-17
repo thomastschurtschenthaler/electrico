@@ -5,6 +5,7 @@ use log::{error, debug};
 
 pub struct IPCResponse {
     pub params:Vec<u8>, 
+    pub data_blob:Option<Vec<u8>>, 
     pub mime_type:String,
     pub status:StatusCode
 }
@@ -14,7 +15,16 @@ impl IPCResponse {
         IPCResponse {
             params:params,
             mime_type:mime_type,
-            status:status
+            status:status,
+            data_blob:None
+        }
+    }
+    pub fn with_data(params:Vec<u8>, data_blob:Option<Vec<u8>>, mime_type:String, status:StatusCode) -> IPCResponse {
+        IPCResponse {
+            params:params,
+            mime_type:mime_type,
+            status:status,
+            data_blob:data_blob
         }
     }
 }

@@ -4,7 +4,21 @@
     let decoder = new TextDecoder();
     let _fd=0;
     let watched_files = {};
+    let Stats = class {
+        constructor(resp) {
+            this.isDirectory = () => {
+                return resp.isDirectory
+            },
+            this.isFile = () => {
+                return !resp.isDirectory
+            },
+            this.size = resp.size;
+            this.birthtime = resp.birthtime!=null?new Date(resp.birthtime.secs_since_epoch*1000):null;
+            this.mtime = resp.mtime!=null?new Date(resp.mtime.secs_since_epoch*1000):null;
+        }
+    };
     let fs = {
+        Stats: Stats,
         constants: {
             "F_OK": 1,
             "R_OK": 2,
@@ -38,17 +52,7 @@
                     cb({"code":"ENOENT", "message": "no such file or directory, lstat '"+path+"'"});
                 } else {
                     let resp = JSON.parse(r);
-                    cb(null, {
-                        isDirectory: () => {
-                            return resp.isDirectory
-                        },
-                        isFile: () => {
-                            return !resp.isDirectory
-                        },
-                        size: resp.size,
-                        birthtime: resp.birthtime!=null?new Date(resp.birthtime.secs_since_epoch*1000):null,
-                        mtime: resp.mtime!=null?new Date(resp.mtime.secs_since_epoch*1000):null
-                    });
+                    cb(null, new Stats(resp));
                 }
             });
         },
@@ -58,17 +62,7 @@
                 throw {"code":"ENOENT", "message": "no such file or directory, lstat '"+path+"'"};
             }
             let resp = JSON.parse(r);
-            return {
-                isDirectory: () => {
-                    return resp.isDirectory
-                },
-                isFile: () => {
-                    return !resp.isDirectory
-                },
-                size: resp.size,
-                birthtime: resp.birthtime!=null?new Date(resp.birthtime.secs_since_epoch*1000):null,
-                mtime: resp.mtime!=null?new Date(resp.mtime.secs_since_epoch*1000):null
-            };
+            return new Stats(resp);
         },
         existsSync(path) {
             let {r, e} = $e_node.syncApi_FS_Access({"path":path, "mode": 1});
@@ -505,6 +499,49 @@
     };
     fs.statSync=fs.lstatSync;
     fs.stat=fs.lstat;
+    const ReadStream = class extends EventEmitter {
+        constructor(path, options) {
+            super();
+            const chunk = 65536;
+            const buffer = Buffer.alloc(chunk);
+            let _this=this;
+            this.destroy = () => {       
+            }
+            this.pipe = (out) => {
+                fs.open(path, (e, fd)=>{
+                    if (e!=null) {
+                        _this.emit("error", "fs.open error: "+e);
+                        return;
+                    }
+                    const doRead = (from, position) => {
+                        let to = Math.min(from+chunk, options.end+1);
+                        fs.read(fd, buffer, 0, to-from, position, (e, bytesRead, buffer)=>{
+                            if (e!=null) {
+                                _this.emit("error", "fs.read error: "+e);
+                                return;
+                            }
+                            let nfrom = from+bytesRead;
+                            let buf = buffer.subarray(0, bytesRead);
+                            if (nfrom<=options.end) {
+                                out.write(buf, null, ()=>{
+                                    doRead(nfrom);
+                                });
+                            } else {
+                                out.end(buf, null, ()=> {
+                                    _this.emit("end");
+                                });
+                            }
+                        });
+                    };
+                    doRead(0, options.start);
+                });
+            }
+        }
+    };
+    fs.ReadStream = ReadStream;
+    fs.createReadStream = (path, options) => {
+        return new ReadStream(path, options);
+    },
     window.__electrico.libs["node:fs"] = fs;
     window.__electrico.libs["original-fs"] = fs;
     window.__electrico.libs.fs = fs;

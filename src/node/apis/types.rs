@@ -12,7 +12,8 @@ pub enum APICommand {
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(tag = "action")]
 pub enum HTTPCommand {
-  Request {options:HTTPOptions}
+  Request {options:HTTPOptions},
+  CreateServer {port:u16, options: Option<NETOptions>},
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -45,13 +46,12 @@ pub enum NETCommand {
   CloseServer {id:String},
   CloseConnection {id:String},
   CreateConnection {hook:String, id:String},
-  WriteConnection {id:String},
+  WriteConnection {id:String, end:bool},
   SetTimeout {id:String, timeout:u128},
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct NETOptions {
-  
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]

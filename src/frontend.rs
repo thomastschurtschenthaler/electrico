@@ -1,6 +1,9 @@
-use std::net::SocketAddr;
+use std::convert::Infallible;
+use std::net::TcpListener;
 use std::thread;
 use std::time::Duration;
+use bytes::{BufMut, BytesMut};
+use fastwebsockets::{upgrade, Frame, OpCode, Payload};
 use http_body_util::{BodyExt, Full};
 use hyper::body::Bytes;
 use hyper::header::ACCESS_CONTROL_ALLOW_ORIGIN;
@@ -8,7 +11,6 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Request, Response};
 use hyper_util::rt::TokioIo;
-use tokio::net::TcpListener;
 use log::{debug, error, info, trace, warn};
 use include_dir::{include_dir, Dir};
 use reqwest::StatusCode;
@@ -20,9 +22,10 @@ use std::{collections::HashMap, fs, path::PathBuf};
 use tao::{dpi::{LogicalPosition, LogicalSize, PhysicalPosition, PhysicalSize}, event_loop::{EventLoopProxy, EventLoopWindowTarget}, window::{Icon, Window, WindowBuilder, WindowId}};
 use serde_json::Error;
 use wry::{WebView, WebViewBuilder};
-use crate::common::get_message_data_http;
+use crate::common::{get_message_data_http, parse_http_url_path, CONTENT_TYPE_HTML};
 use crate::ipcchannel::IPCResponse;
-use crate::{common::{append_js_scripts, escape, DataQueue, CONTENT_TYPE_TEXT, JS_DIR_FRONTEND}, electron::types::{BrowserWindowCreateParam, Rectangle}, types::{Command, ElectricoEvents, FrontendCommand}};
+use crate::types::{ChannelMsg, WebSocketCmd};
+use crate::{common::{append_js_scripts, escape, CONTENT_TYPE_TEXT, JS_DIR_FRONTEND}, electron::types::{BrowserWindowCreateParam, Rectangle}, types::{Command, ElectricoEvents, FrontendCommand}};
 
 pub struct FrontendWindow {
     window:Window,
@@ -30,6 +33,8 @@ pub struct FrontendWindow {
     id:WindowId,
     http_id: String,
     client_path_base:Option<PathBuf>,
+    ws_channels:HashMap<String, Sender<WebSocketCmd>>,
+    msg_channels:HashMap<String, Sender<ChannelMsg>>
 }
 impl FrontendWindow {
     pub fn new(window:Window, webview:WebView, id:WindowId, http_id:String) -> FrontendWindow {
@@ -38,7 +43,9 @@ impl FrontendWindow {
             webview:webview,
             id:id,
             http_id,
-            client_path_base:None
+            client_path_base:None,
+            ws_channels:HashMap::new(),
+            msg_channels:HashMap::new()
         }
     }
     pub fn set_client_path_base(&mut self, client_path_base:Option<PathBuf>) {
@@ -63,8 +70,6 @@ pub struct Frontend {
     opened_windows:usize,
     frontendalljs:String,
     rsrc_dir:PathBuf,
-    data_queue:DataQueue,
-    http_port_start:u16,
     http_port:Option<u16>,
     file_protocols:Vec<String>
 }
@@ -81,144 +86,30 @@ impl Frontend {
             opened_windows:0,
             frontendalljs:frontendalljs,
             rsrc_dir:rsrc_dir,
-            data_queue:DataQueue::new(),
-            http_port_start:3000,
             http_port:None,
             file_protocols:Vec::new()
         }
     }
-    
-    pub fn create_window(&mut self, id:String, event_loop:&EventLoopWindowTarget<ElectricoEvents>, proxy:EventLoopProxy<ElectricoEvents>, config_params:BrowserWindowCreateParam) {
-        fn find_tcp_port(http_port_start:u16) -> u16 {
-            for p in http_port_start..http_port_start+1000 {
-                let addr = SocketAddr::from(([127, 0, 0, 1], p));
-                if let Ok(_) = std::net::TcpListener::bind(addr) {
-                    return p;
-                }
+
+
+    #[tokio::main]
+    pub async fn start_http_server(proxy:EventLoopProxy<ElectricoEvents>, tcp_listener:TcpListener, port:u16, protocols:Vec<String>) {
+        fn is_electrico_ipc(path:&String) -> bool {
+            path.starts_with("/electrico-ipc")
+        }
+        fn module_file_path(path:String) -> String {
+            let mut fpath = path;
+            if fpath.starts_with("/") {
+                fpath = fpath.substring(1, fpath.len()).to_string();
             }
-            panic!("create_tcp_listener - no free port");
+            fpath = fpath.replace("..", "");
+            return fpath;
         }
-
-        #[tokio::main(flavor = "multi_thread", worker_threads = 30)]
-        async fn start_http_server(proxy:EventLoopProxy<ElectricoEvents>, port:u16, protocols:Vec<String>) {    
-            trace!("start_http_server");
-            let addr = SocketAddr::from(([127, 0, 0, 1], port));
-            let listener= TcpListener::bind(addr).await.expect("start_http_server - TcpListener failed");
-            loop {
-                let (stream, _) = listener.accept().await.expect("start_http_server listener.accept() failed");
-                let io = TokioIo::new(stream);
-                let s_proxy = proxy.clone();
-                let protocols = protocols.clone();
-                tokio::task::spawn(async move {
-                    let protocols = protocols.clone();
-                    let service = service_fn(move |request:Request<hyper::body::Incoming>| {
-                        let pparts:Vec<&str> = request.uri().path().split("/").collect();
-                        trace!("http server - got request: {}, {:?}", request.uri().to_string(), request.uri().authority());
-                        let mut urlparts:Option<(String, String, String, String)> = None;
-                        if let Some(host) = pparts.get(1) {
-                            let hparts:Vec<&str> = host.split("@").collect();
-                            if let Some(http_id_str) =  hparts.get(0) {
-                                let http_id = http_id_str.to_string();
-                                if let Some(protocol) =  hparts.get(1) {
-                                    if let Some(url_root) = pparts.get(2) {
-                                        let url = format!("/{}", pparts[3..pparts.len()].join("/"));
-                                        urlparts = Some((http_id, protocol.to_string(), url_root.to_string(), url));
-                                    }
-                                }
-                            }
-                        }
-                        let mut query:Option<String> = None;
-                        if let Some(q) = request.uri().query() {
-                            query = Some(q.to_string());
-                        } 
-                        let s2_proxy = s_proxy.clone();
-                        let (req_sender, mut req_receiver): (Sender<IPCResponse>, Receiver<IPCResponse>) = mpsc::channel(100);
-                        let protocols = protocols.clone();
-                        return async move {
-                            if let Some((http_id, protocol, url_root, url)) = urlparts {
-                                trace!("http_server processing request:{http_id}, {protocol}, {url_root}, {url}");
-                                let url2 = url.clone();
-                                if let Ok(body) = request.collect().await {
-                                    let data = body.to_bytes().to_vec();
-                                    if is_electrico_ipc(&url) {
-                                        trace!("http_server - electrico-ipc request:{url}");
-                                        handle_electrico_ipc(&http_id, &s2_proxy, url, query.clone(), data, req_sender);
-                                    } else {
-                                        if url_root == "electrico-mod" || protocol == "electrico-file" {
-                                            let module = url_root == "electrico-mod"; 
-                                            trace!("browser file protocol request {}; {}", url, module);
-                                            let _ = s2_proxy.send_event(ElectricoEvents::ExecuteCommand {command:Command::BrowserWindowReadFile {
-                                                http_id, 
-                                                file_path: module_file_path(url), 
-                                                module
-                                            }, responder:crate::types::Responder::HttpProtocol { sender:req_sender }, data_blob:None});
-                                        } else {
-                                            let mut path = url;
-                                            if let Some(query) = query.clone() {
-                                                path = format!("{path}?{query}");
-                                            }
-                                            trace!("custom file protocol request: {}, {}", protocol, path);
-                                            let _ = s2_proxy.send_event(ElectricoEvents::ExecuteCommand {command:Command::PostIPC {
-                                                http_id,
-                                                nonce:None,
-                                                request_id:Uuid::new_v4().to_string(),
-                                                params: format!("[\"__electrico_protocol\", \"{}\", \"{}\"]", escape(&protocol), path)
-                                            }, responder:crate::types::Responder::HttpProtocol { sender:req_sender}, data_blob:None});
-                                        }
-                                    }
-                                    if let Ok(r) = timeout(Duration::from_secs(30), req_receiver.recv()).await {
-                                        if let Some(r) = r {
-                                            trace!("http - request response: {}", r.params.len());
-                                            let mut r_body = r.params; 
-                                            if let Some(query)  = query {
-                                                if query.ends_with("electrico_hostpage=true") {
-                                                    let mut host_page_html = String::from_utf8(r_body).expect("host page utf-8 failed");
-                                                    for p in protocols {
-                                                        if let Some(_) = host_page_html.find(format!("{p}:").as_str()) {
-                                                            host_page_html = host_page_html.replace(format!("{p}:").as_str(), format!("*.localhost:{port}").as_str());
-                                                        }
-                                                    }
-                                                    r_body = host_page_html.as_bytes().to_vec();
-                                                }
-                                            }
-                                            return Ok::<_, Error>(Response::builder()
-                                                .header("Content-Type", r.mime_type)
-                                                .header(ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-                                                .status(r.status)
-                                                .body(Full::new(Bytes::from(r_body))).expect("http body full failed"));
-                                        } else {
-                                            error!("http - request no response:{url2}");
-                                        }
-                                    } else {
-                                        error!("http - request timed out:{url2}");
-                                    }
-                                }
-                            }
-                            error!("http - invalid http request");
-                            return Ok::<_, Error>(Response::builder().status(StatusCode::BAD_REQUEST).body(Full::new(Bytes::from(StatusCode::BAD_REQUEST.to_string()))).expect("http body full failed"));
-                        };
-                    });
-                    if let Err(err) = http1::Builder::new()
-                        .keep_alive(true)
-                        .serve_connection(io, service)
-                        .await
-                    {
-                        error!("Error serving connection: {:?}", err);
-                    }
-                });
-            }   
+        fn handle_async_ws_ipc(http_id:String, proxy:EventLoopProxy<ElectricoEvents>, request_id:String, nonce:String, channel:String, params:String, data_blob:Option<Vec<u8>>) {
+            trace!("frontend handle_async_ws_ipc: {} {} {}", request_id, nonce, params);
+            let _ = proxy.send_event(ElectricoEvents::ExecuteCommand{command:Command::PostIPC {http_id:http_id.clone(), from_backend:false, nonce:Some(nonce), request_id, channel, params}, responder:crate::types::Responder::None, data_blob});
         }
-        if self.http_port==None {
-            let port = find_tcp_port(self.http_port_start);
-            let s_proxy = proxy.clone();
-            let protocols = self.file_protocols.clone();
-            thread::spawn(move || {
-                start_http_server(s_proxy, port, protocols);
-            });
-            self.http_port=Some(port);
-        }
-
-        fn handle_electrico_ipc(http_id: &String, proxy: &EventLoopProxy<ElectricoEvents>, url:String, query:Option<String>, request: Vec<u8>, sender:Sender<IPCResponse>) {
+        async fn handle_electrico_ipc(http_id: &String, proxy: &EventLoopProxy<ElectricoEvents>, url:String, query:Option<&str>, request: Vec<u8>, sender:Sender<IPCResponse>) {
             trace!("frontend ipc request {}", url);
             let message_data:Option<(String, Option<Vec<u8>>)> = get_message_data_http(query, request);
             if let Some(message_data) = message_data {
@@ -227,9 +118,9 @@ impl Frontend {
                 match commandr {
                     Ok (command) => {
                         match command {
-                            FrontendCommand::PostIPC {request_id, nonce, params } => {
-                                trace!("frontend ipc call {} {}", nonce, params);
-                                let _ = proxy.send_event(ElectricoEvents::ExecuteCommand{command:Command::PostIPC {http_id:http_id.clone(), nonce:Some(nonce), request_id, params}, responder:crate::types::Responder::HttpProtocol { sender }, data_blob:message_data.1});
+                            FrontendCommand::PostIPC {request_id, nonce, data_blob:_, channel, params } => {
+                                trace!("frontend ipc call {} {} {}", request_id, nonce, params);
+                                let _ = proxy.send_event(ElectricoEvents::ExecuteCommand{command:Command::PostIPC {http_id:http_id.clone(), from_backend:false, nonce:Some(nonce), request_id, channel, params}, responder:crate::types::Responder::HttpProtocol { sender }, data_blob:message_data.1});
                             },
                             FrontendCommand::GetProcessInfo {nonce} => {
                                 let _ = proxy.send_event(ElectricoEvents::ExecuteCommand{command:Command::FrontendGetProcessInfo {http_id:http_id.clone(), nonce:nonce}, responder:crate::types::Responder::HttpProtocol { sender }, data_blob:None});
@@ -239,9 +130,6 @@ impl Frontend {
                             },
                             FrontendCommand::Alert {message } => {
                                 let _ = proxy.send_event(ElectricoEvents::ExecuteCommand{command:Command::Electron { invoke: crate::electron::types::ElectronCommand::Api { data: format!("{{\"api\":\"Dialog\", \"command\":{{\"action\":\"ShowMessageBoxSync\", \"options\":{{\"message\":\"{}\"}}}}}}", escape(&message)) } }, responder:crate::types::Responder::HttpProtocol { sender }, data_blob:None});
-                            },
-                            FrontendCommand::GetDataBlob { id } => {
-                                let _ = proxy.send_event(ElectricoEvents::ExecuteCommand{command:Command::FrontendGetDataBlob { id }, responder:crate::types::Responder::HttpProtocol { sender }, data_blob:None});
                             },
                             FrontendCommand::GetProtocols => {
                                 let _ = proxy.send_event(ElectricoEvents::ExecuteCommand{command:Command::FrontendGetProtocols, responder:crate::types::Responder::HttpProtocol { sender }, data_blob:None});
@@ -258,7 +146,209 @@ impl Frontend {
                 });
             }
         }
-        
+        trace!("start_http_server");
+        let listener = tokio::net::TcpListener::from_std(tcp_listener).expect("TcpListener::from_std failed");
+        loop {
+            let (stream, _) = listener.accept().await.expect("start_http_server listener.accept() failed");
+            let io = TokioIo::new(stream);
+            let s_proxy = proxy.clone();
+            let protocols = protocols.clone();
+            tokio::task::spawn(async move {
+                let protocols = protocols.clone();
+                let service = service_fn(|mut request:Request<hyper::body::Incoming>| {
+                    trace!("http server - got request: {}, {:?}", request.uri().to_string(), request.uri().authority());
+                    let urlparts = parse_http_url_path(request.uri().path());
+                    let s2_proxy = s_proxy.clone();
+                    let protocols = protocols.clone();
+                    return async move {
+                        if let Some((http_id, protocol, url_root, url)) = urlparts {
+                            trace!("http_server processing request:{http_id}, {protocol}, {url_root}, {url}");
+                            if protocol == "asyncin" || protocol == "asyncout" {
+                                let (ws_sender, mut ws_receiver): (Sender<WebSocketCmd>, Receiver<WebSocketCmd>) = mpsc::channel(1000);
+                                let (msg_sender, mut msg_receiver): (Sender<ChannelMsg>, Receiver<ChannelMsg>) = mpsc::channel(10000);
+                    
+                                trace!("async websocket:{},{}", protocol, url_root);
+                                let (resp, fut) = upgrade::upgrade(&mut request).expect("upgrade::upgrade failed");
+                                tokio::task::spawn(async move {
+                                    let socket = fut.await.expect("FragmentCollector failed");
+                                    let mut ws = fastwebsockets::FragmentCollector::new(socket);
+                                    let ws_channel = url_root;
+                                    if let Some(ix) = url.rfind("/") {
+                                        let _ = s2_proxy.send_event(ElectricoEvents::FrontendConnectWS {http_id:http_id.clone(), window_id:url.substring(1, ix).to_string(), channel:ws_channel, ws_sender:ws_sender.clone(), msg_sender:msg_sender});
+                                    }
+                                    if protocol == "asyncin" {
+                                        tokio::task::unconstrained(async move {
+                                            let mut request_message_data:Option<(String, String, String, String)> = None;
+                                            loop {
+                                                let http_id = http_id.clone();
+                                                let s2_proxy = s2_proxy.clone();
+                                                if let Ok(frame) =  ws.read_frame().await {
+                                                    match frame.opcode {
+                                                        OpCode::Close => {
+                                                            debug!("websocket in closed");
+                                                            break;
+                                                        },
+                                                        OpCode::Binary => {
+                                                            trace!("websocket message");
+                                                            let req_msg:Vec<u8> = frame.payload.into();
+                                                            if let Some(msg) = request_message_data {
+                                                                request_message_data = None;
+                                                                handle_async_ws_ipc(http_id, s2_proxy,  msg.0, msg.1, msg.2,msg.3, Some(req_msg));
+                                                            } else {
+                                                                let commandr:Result<FrontendCommand, Error> = serde_json::from_slice(req_msg.as_slice());
+                                                                match commandr {
+                                                                    Ok (command) => {
+                                                                        match command {
+                                                                            FrontendCommand::PostIPC {request_id, nonce, data_blob, channel, params } => {
+                                                                                trace!("frontend ipc call {} {} {}", request_id, nonce, params);
+                                                                                if data_blob {
+                                                                                    request_message_data = Some((request_id, nonce, channel, params));
+                                                                                } else {
+                                                                                    handle_async_ws_ipc(http_id, s2_proxy, request_id, nonce, channel, params, None);
+                                                                                }
+                                                                            },
+                                                                            _ => {}
+                                                                        }
+                                                                    },
+                                                                    Err(e) => {
+                                                                        error!("handle_async_ws_ipc deserialize:{e}");
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                        _ => {}
+                                                    }
+                                                }
+                                            }
+                                        }).await;
+                                    } else {
+                                        loop {
+                                            if let Ok(resp_msg) = timeout(Duration::from_millis(1000), msg_receiver.recv()).await {
+                                                if let Some(resp_msg) = resp_msg {
+                                                    trace!("websocket write response message");
+                                                    let has_data = resp_msg.data_blob.is_some();
+                                                    let channel = resp_msg.channel;
+                                                    let params = resp_msg.params;
+                                                    let message = format!("{has_data}|{channel}|{params}");
+                                                    let mut buf = BytesMut::with_capacity(message.len());
+                                                    buf.put(message.as_bytes());
+                                                    ws.write_frame(Frame::binary(Payload::Bytes(buf))).await.expect("ws.write_frame failed");
+                                                    if let Some(data) = resp_msg.data_blob {
+                                                        let mut buf = BytesMut::with_capacity(data.len());
+                                                        buf.put(data.as_slice());
+                                                        ws.write_frame(Frame::binary(Payload::Bytes(buf))).await.expect("ws.write_frame data failed");
+                                                    }
+                                                }
+                                            }
+                                            if let Ok(frame) = timeout(Duration::from_millis(1), ws.read_frame()).await {
+                                                if let Ok(frame) = frame {
+                                                    if frame.opcode == OpCode::Close {
+                                                        debug!("websocket out closed");
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                });
+                                return Ok(Response::builder()
+                                    .status(hyper::StatusCode::SWITCHING_PROTOCOLS)
+                                    .header(hyper::header::CONNECTION, "upgrade")
+                                    .header(hyper::header::UPGRADE, "websocket")
+                                    .header("Sec-WebSocket-Accept", resp.headers().get("Sec-WebSocket-Accept").expect("Sec-WebSocket-Accept header failed"))
+                                    .body(Full::new(Bytes::from(""))).expect("http body full failed")); 
+                                
+                            }
+                            let (req_sender, mut req_receiver): (Sender<IPCResponse>, Receiver<IPCResponse>) = mpsc::channel(1000);
+                            let url2 = url.clone();
+                            if let Ok(body) = request.body_mut().collect().await {
+                                let query = request.uri().query().clone();
+                                let data = body.to_bytes().to_vec();
+                                if is_electrico_ipc(&url) {
+                                    trace!("http_server - electrico-ipc request:{url}");
+                                    handle_electrico_ipc(&http_id, &s2_proxy, url, query.clone(), data, req_sender).await;
+                                } else {
+                                    if url_root == "electrico-mod" || protocol == "electrico-file" {
+                                        let module = url_root == "electrico-mod"; 
+                                        trace!("browser file protocol request {}; {}", url, module);
+                                        let _ = s2_proxy.send_event(ElectricoEvents::ExecuteCommand {command:Command::BrowserWindowReadFile {
+                                            http_id, 
+                                            file_path: module_file_path(url), 
+                                            module
+                                        }, responder:crate::types::Responder::HttpProtocol { sender:req_sender }, data_blob:None});
+                                    } else {
+                                        let mut path = url;
+                                        if let Some(query) = query.clone() {
+                                            path = format!("{path}?{query}");
+                                        }
+                                        trace!("custom file protocol request: {}, {}", protocol, path);
+                                        let _ = s2_proxy.send_event(ElectricoEvents::ExecuteCommand {command:Command::PostIPC {
+                                            http_id,
+                                            nonce:None,
+                                            from_backend: false,
+                                            request_id:Uuid::new_v4().to_string(),
+                                            channel: format!("__electrico_protocol"),
+                                            params: format!("[\"{}\", \"{}\"]", escape(&protocol), path)
+                                        }, responder:crate::types::Responder::HttpProtocol { sender:req_sender}, data_blob:None});
+                                    }
+                                }
+                                if let Ok(r) = timeout(Duration::from_secs(300), req_receiver.recv()).await {
+                                    if let Some(r) = r {
+                                        trace!("http - request response: {}", r.params.len());
+                                        let mut r_body = r.params; 
+                                        if let Some(query)  = query {
+                                            if query.ends_with("electrico_hostpage=true") {
+                                                let mut host_page_html = String::from_utf8(r_body).expect("host page utf-8 failed");
+                                                for p in protocols {
+                                                    if let Some(_) = host_page_html.find(format!("{p}:").as_str()) {
+                                                        host_page_html = host_page_html.replace(format!("{p}:").as_str(), format!("*.localhost:{port}").as_str());
+                                                    }
+                                                }
+                                                r_body = host_page_html.as_bytes().to_vec();
+                                            }
+                                        }
+                                        return Ok::<_, Infallible>(Response::builder()
+                                            .header("Content-Type", r.mime_type)
+                                            .header(ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                                            .status(r.status)
+                                            .body(Full::new(Bytes::from(r_body))).expect("http body full failed"));
+                                    } else {
+                                        error!("http - request no response:{url2}");
+                                    }
+                                } else {
+                                    error!("http - request timed out:{url2}");
+                                }
+                            }
+                        }
+                        error!("http - invalid http request");
+                        return Ok::<_, Infallible>(Response::builder().status(StatusCode::BAD_REQUEST).body(Full::new(Bytes::from(StatusCode::BAD_REQUEST.to_string()))).expect("http body full failed"));
+                    };
+                });
+                if let Err(err) = http1::Builder::new()
+                    .keep_alive(true)
+                    .serve_connection(io, service)
+                    .with_upgrades()
+                    .await
+                {
+                    error!("Error serving connection: {:?}", err);
+                }
+            });
+        }   
+    }
+    
+    pub fn create_window(&mut self, id:String, event_loop:&EventLoopWindowTarget<ElectricoEvents>, proxy:EventLoopProxy<ElectricoEvents>, config_params:BrowserWindowCreateParam) {    
+        if self.http_port==None {
+            let s_proxy = proxy.clone();
+            let protocols = self.file_protocols.clone();
+            let listener= TcpListener::bind("127.0.0.1:0").expect("start_http_server - TcpListener failed");
+            let addr = listener.local_addr().expect("listener.local_addr failed");
+            let _ = listener.set_nonblocking(true);
+            thread::spawn(move || {
+                Frontend::start_http_server(s_proxy, listener, addr.port(), protocols);
+            });
+            self.http_port=Some(addr.port());
+        }
+
         let mut preload:String = "".to_string();
         if let Some(preloadstr) = config_params.config.web_preferences.preload {
              preload=preloadstr;
@@ -349,7 +439,7 @@ impl Frontend {
             target_os = "ios",
             target_os = "android"
         ))]
-        let mut webview_builder = WebViewBuilder::new(&window);
+        let mut webview_builder = WebViewBuilder::new();
     
         #[cfg(not(any(
             target_os = "windows",
@@ -363,19 +453,6 @@ impl Frontend {
             let vbox = window.default_vbox().unwrap();
             WebViewBuilder::new_gtk(vbox)
         };
-
-        fn module_file_path(path:String) -> String {
-            let mut fpath = path;
-            if fpath.starts_with("/") {
-                fpath = fpath.substring(1, fpath.len()).to_string();
-            }
-            fpath = fpath.replace("..", "");
-            return fpath;
-        }
-
-        fn is_electrico_ipc(path:&String) -> bool {
-            path.starts_with("/electrico-ipc")
-        }
         
         let http_uid = Uuid::new_v4().to_string();
         debug!("frontend create_window - http_uid:{http_uid}");
@@ -391,12 +468,13 @@ impl Frontend {
         let webview = webview_builder
             .with_initialization_script(init_script.as_str())
             .with_navigation_handler(nav_handler)
-            //.with_proxy_config(wry::ProxyConfig::Http(wry::ProxyEndpoint { host: format!("127.0.0.1"), port: format!("{http_port}") }))
             .with_devtools(true)
             .with_clipboard(true)
-            .build().unwrap();
+            .build(&window).unwrap();
         #[cfg(debug_assertions)]
         webview.open_devtools();
+
+
         
         let w_id = window.id().clone();
         self.window_http_ids.insert(http_uid.clone(), config_params.id.clone());
@@ -458,29 +536,24 @@ impl Frontend {
             error!("show - frontend_webview not there - id: {}", id);
         }
     }
-    pub fn send_channel_message(&mut self, proxy: EventLoopProxy<ElectricoEvents>, id:String, rid:String, channel:String, args:String, data:Option<Vec<u8>>) {
+    pub fn send_channel_message(&mut self, id:String, channel:String, args:String, data:Option<Vec<u8>>) {
         if let Some(window) = self.windows.get(&id) {
-            if let Some(data) = data {
-                self.data_queue.add(&rid, data);
+            if let Some(sender) = window.msg_channels.get("ipcout") {
+                let _ = sender.blocking_send(ChannelMsg {channel, params:args, data_blob:data});
+            } else {
+                error!("send_channel_message - ipcout websocket not there");
             }
-            let _ = window.webview.evaluate_script_with_callback(format!("window.__electrico.sendChannelMessage('{}', '{}', '{}');", &rid, &channel, escape(&args)).as_str(), move |r| {
-                if r.len()==0 {
-                    trace!("send_channel_message not OK - resending");
-                    let _ = proxy.send_event(ElectricoEvents::SendChannelMessageRetry { browser_window_id: id.clone(), rid:rid.clone(), channel:channel.clone(), args:args.clone()});
-                }
-            });
         } else {
             error!("send_channel_message - frontend_webview not there - id: {}", id);
         }
     }
-    pub fn get_data_blob(&mut self, id:String) -> Option<Vec<u8>> {
-        let data:Option<Vec<u8>>;
-        if let Some(d) = self.data_queue.take(&id) {
-            data = Some(d.to_vec());
+    pub fn connect_ws(&mut self, id:&String, channel:String, ws_sender:Sender<WebSocketCmd>, msg_sender:Sender<ChannelMsg>) {
+        if let Some(window) = self.windows.get_mut(id) {
+            window.ws_channels.insert(channel.clone(), ws_sender);
+            window.msg_channels.insert(channel, msg_sender);
         } else {
-            data = None;
-        };
-        return data;
+            error!("connect_ws - frontend_webview not there - id: {}", id);
+        }
     }
     pub fn execute_javascript(&mut self, id:&String, script:&String) {
         if let Some(window) = self.windows.get(id) {

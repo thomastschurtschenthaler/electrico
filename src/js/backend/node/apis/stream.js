@@ -21,9 +21,8 @@
     }
     util.inherits(TransformCls, EventEmitter);
 
-    const stream = {
-        Transform: TransformCls
-    };
+    const stream = EventEmitter;
+    stream.Transform = TransformCls;
     window.__electrico.libs["node:stream"] = stream;
     window.__electrico.libs.stream = stream;
 })();

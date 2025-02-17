@@ -122,7 +122,7 @@ pub enum ElectronCommand {
     BrowserWindowMaximized {id: String, params:BrowserWindowMaximizedAction},
     BrowserWindowMinimized {id: String, params:BrowserWindowMinimizedAction},
     BrowserWindowDevTools {params: BrowserWindowDevToolsParam},
-    ChannelSendMessage {id: String, rid: String, channel: String, args: String},
+    ChannelSendMessage {id: String, channel: String, args: String},
     ExecuteJavascript {id: String, script:String},
     AppQuit {exit: bool},
     AppSetName {name: String},

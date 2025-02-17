@@ -50,7 +50,7 @@ pub enum ChildProcess {
 }
 
 pub enum NETConnection {
-  Write {data: Vec<u8>},
+  Write {data: Vec<u8>, end:bool},
   SetTimeout {timeout: Option<u128>},
   Disconnect,
   EndConnection
@@ -60,8 +60,16 @@ pub enum NETServer {
   Close
 }
 
+pub struct ChannelMsg {
+  pub channel: String,
+  pub params: String,
+  pub data_blob: Option<Vec<u8>>
+}
+pub enum WebSocketCmd {
+  
+}
+
 pub enum BackendCommand {
-  IPCCall {browser_window_id:String, request_id:String, params:String},
   ChildProcessCallback {pid:String, stream:String, end:bool, data:Option<Vec<u8>>},
   ChildProcessExit {pid:String, exit_code:Option<i32>},
   FSWatchEvent {wid:String, event:Event},
@@ -75,38 +83,49 @@ pub enum BackendCommand {
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
 #[serde(tag = "action")]
 pub enum Command {
-  PostIPC {http_id: String, nonce:Option<String>, request_id:String, params: String},
+  PostIPC {http_id: String, from_backend:bool, nonce:Option<String>, request_id:String, channel:String, params: String},
   SetIPCResponse {request_id:String, file_path:Option<String>},
   DOMContentLoaded {http_id: String, title:String},
   BrowserWindowReadFile {http_id: String, file_path: String, module:bool},
   Node {invoke:NodeCommand},
   Electron {invoke:ElectronCommand},
   ShellCallback {stdout:String},
-  FrontendGetDataBlob {id: String},
   FrontendGetProcessInfo {http_id:String, nonce: String},
   FrontendGetProtocols
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug)]
+pub struct CommandMessage {
+  pub command: Command,
+  pub data_blob:bool
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(tag = "action")]
 pub enum FrontendCommand {
-  PostIPC {request_id:String, nonce:String, params: String},
+  PostIPC {request_id:String, nonce:String, data_blob:bool, channel:String, params: String},
   GetProcessInfo {nonce:String},
   DOMContentLoaded {title: String},
   Alert {message: String},
-  GetDataBlob {id: String},
   GetProtocols
+}
+
+pub enum Responders {
+  HTTP {sender:Sender<IPCResponse>},
+  CP {responder:RequestAsyncResponder}
 }
 
 pub enum Responder {
   CustomProtocol {responder:RequestAsyncResponder},
-  HttpProtocol {sender:Sender<IPCResponse>}
+  HttpProtocol {sender:Sender<IPCResponse>},
+  None
 }
 
 pub enum ElectricoEvents {
   ExecuteCommand {command: Command, responder: Responder, data_blob:Option<Vec<u8>>},
   FrontendNavigate {browser_window_id:String, page: String, preload: String},
-  SendChannelMessageRetry { browser_window_id:String, rid:String, channel:String, args:String},
+  FrontendConnectWS {http_id:String, window_id:String, channel:String, ws_sender:Sender<WebSocketCmd>, msg_sender:Sender<ChannelMsg>},
+  BackendConnectWS {channel:String, msg_sender:Sender<ChannelMsg>},
   Exit,
   Noop
 }

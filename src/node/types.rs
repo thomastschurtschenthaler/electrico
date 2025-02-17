@@ -30,9 +30,9 @@ pub enum NodeCommand {
   ConsoleLog {params: ConsoleLogParam},
   GetProcessInfo,
   GetStartArgs,
-  GetDataBlob {id: String},
   ExecuteSync {script: String},
   ExecuteSyncResponse {uuid: String, data:Option<String>, error:Option<String>},
+  ChannelSendMessage {channel: String, args: String},
   Addon {data: String},
   Api {data: String}
 }

@@ -29,16 +29,15 @@ pub fn process_net_command(tokio_runtime:&Runtime, _app_env:&AppEnv,
             respond_ok(responder);
         },
         NETCommand::CreateConnection { hook, id } => {
-            trace!("NETCreateConnection {}, {}", hook, id);
+            trace!("NETCommand::CreateConnection {}, {}", hook, id);
             ipc_connection(hook, id, tokio_runtime, proxy, command_sender, responder);
         },
-        NETCommand::WriteConnection { id } => {
-            trace!("NETWriteConnection {}", id);
+        NETCommand::WriteConnection { id, end } => {
             if let Some(data) = data_blob {
-                backend.net_write_connection(id, data);
+                backend.net_write_connection(id, end, data);
                 respond_ok(responder);
             } else {
-                error!("NETWriteConnection error, no data");
+                error!("NETCommand::WriteConnection error, no data");
                 respond_status(StatusCode::INTERNAL_SERVER_ERROR, CONTENT_TYPE_TEXT.to_string(), format!("NETWriteConnection error, no data").into_bytes(), responder);
             }
         },

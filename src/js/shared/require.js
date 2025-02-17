@@ -72,7 +72,7 @@
                 }
             }
         }
-        function loadModule(_this, mpath, cache) {
+        function loadModule(_this, mpath, cache, submodpath) {
             if (mpath=="module" || mpath=="node:module") {
                 return __module;
             }
@@ -94,8 +94,21 @@
             if (fromLoader!=null) {
                 return fromLoader;
             }
-
             var module = {exports:{__default:{}}}; var exports = {__electrico_deferred:[], __default:{}};
+            const export_fun = function(selector) {
+                let parts = selector.split(",");
+                let toEval="";
+                for (let i=0; i<parts.length; i++) {
+                    let vparts = parts[i].split(" as ");
+                    if (vparts.length==1) {
+                        toEval += "exports['"+vparts[0].trim()+"']="+vparts[0].trim()+";";
+                    } else {
+                        toEval += "exports['"+vparts[1].trim()+"']="+vparts[0].trim()+";";
+                    }
+                }
+                return toEval;
+            };
+            exports.export = export_fun;
             var __e_exports = function(d) {
                 if (d=="") return exports;
                 return exports.__default;
@@ -110,7 +123,7 @@
                 expanded_path=node_modules_base+"/"+mpath;
             }
             expanded_path = normalize(expanded_path);
-            let cache_path = expanded_path;
+            let cache_path = expanded_path+(submodpath!=null?"/"+submodpath:"");
             let cached = fromCache(cache_path);
             if (cached!=null && cached!="" && cache) {
                return cached;
@@ -144,7 +157,9 @@
                 } 
                 if (preq.status==200) {
                     let package = JSON.parse(preq.responseText);
-                    mainjs = package.main!=null?package.main:(package.exports!=null?(package.exports.default!=null?package.exports.default:package.exports):(package.files!=null?package.files[0]:null));
+                    let submodsel = submodpath!=null?"./"+submodpath:".";
+                    let submodvar = submodpath!=null?submodpath:"default";
+                    mainjs = package.main!=null?package.main:(package.exports!=null?(package.exports.default!=null?package.exports.default:((package.exports[submodsel]!=null && package.exports[submodsel][submodvar]!=null)?package.exports[submodsel][submodvar]:package.exports)):(package.files!=null?package.files.filter(f=>{return f.endsWith(".js") || f.endsWith(".json")})[0]:null));
                 }
                 if (mainjs==null && expanded_path.endsWith(".js")) {
                     expanded_mod_path=expanded_path.substring(0, expanded_path.lastIndexOf("."));
@@ -160,11 +175,18 @@
                 req2.open("GET", jsfilepath, false);
                 req2.send();
                 if (req2.status==301) {
+                    if (pathparts.length>1) {
+                        let module = loadModule(_this, pathparts.slice(0, pathparts.length-1).join("/"), cache, pathparts[pathparts.length-1]);
+                        if (module!=null) {
+                            return module;
+                        }
+                    }
                     if (_this!=null && _this.node_modules_path!=null) {
                         console.log("not found in node_modules_path, trying default node_modules", mpath);
                         delete _this.node_modules_path;
                         return loadModule(_this, mpath, cache);
                     }
+                          
                     console.error("js file not found", jsfilepath);
                     return null;
                 }
@@ -195,30 +217,11 @@
 
                 let sourceURL = "//# sourceURL="+expanded_path+"\n";
                 script = window.__replaceImports(script);
-                script = sourceURL+"{\nlet __require_this=_this2;"+script+"\n}";
+                script = sourceURL+"(async function(){\nlet __require_this=_this2;"+script+"\n})()";
                 try {
                     eval(script);
                 } catch (e) {
                     console.error("require error", expanded_path, script, e);
-                      
-                    /*console.error("require error", expanded_path, e);
-                    let fs = require("fs");
-                    let buff = Buffer.from(script);
-                    fs.open("/Users/thomastschurtschenthaler/Documents/workspaces/electrico_stage/electrico/Resources/err_"+window.__uuidv4()+".js", "w", (err, fid)=>{
-                        let i=0;
-                        let dowrite = () => {
-                            fs.write(fid, buff.subarray(i, Math.min(buff.length, i+10000)), ()=>{
-                                i+=10000;
-                                if (i<buff.length) {
-                                    setTimeout(dowrite, 0);
-                                } else {
-                                    fs.close(fid, ()=>{});
-                                }
-                            });
-                        }
-                        dowrite();
-                    });*/
-                   
                     throw e;
                 }
                 if (exports.__electrico_deferred!=null) {
@@ -307,7 +310,8 @@
             return loadModule(__require_this, mpath, true);
         }
         window.__replaceImports = (script) => {
-            script = ("\n"+script+"\n").replaceAll(/([;,\r,\n])import (.*) from [',"](.*)[',"][;,\r,\n]/g, "$1var __electrico_import=__Import(__require_this, '$2', '$3');eval(__electrico_import.toEval);");
+            script = ("\n"+script+"\n").replaceAll(/([;,\r,\n])const( +)exports( *)=(.*)/g, ";exports =$4");
+            script = script.replaceAll(/([;,\r,\n])import (.*) from [',"](.*)[',"][;,\r,\n]/g, "$1var __electrico_import=__Import(__require_this, '$2', '$3');eval(__electrico_import.toEval);");
             script = script.replaceAll(/([;,\r,\n])import [',"](.*)[',"][;,\r,\n]/g, ";$1var __electrico_import=__Import(__require_this, null, '$2');eval(__electrico_import.toEval);");
             script = script.replaceAll("import.meta", "__Import_meta");
             script = script.replaceAll("import(", "__importinline(__require_this, ");
@@ -321,10 +325,9 @@
             script = script.replaceAll(/\export +(let ) *(([^{ ,;,\n}]*))(.*);/g, export_try_deferred);
             script = script.replaceAll(/\export +(const ) *(([^{ ,;,\n}]*))(.*);/g, export_try_deferred);
 
+            script = script.replaceAll(/[ ,\r,\n,;]export +(default)?(const)?(var)?(let)? *{([^}]*)} *;/g,"eval(__e_exports('$1').export('$5'));");
             script = script.replaceAll(/[ ,\r,\n,;]export +(default )?(const )?(var )?(let )? *(([^{ ,;,\n}]*))(.*);/g,"__e_exports('$1')['$6']=$6$7;");
-
             script = script.replaceAll(/\export +(default)?(const)? *((async +function)?(function)?(function\*)?(async +function\*)?(class)? +([^{ ,(,;,\n}]*))/g, "__e_exports('$1')['$9']=$9=$3");
-            //script = script.replaceAll(/([;,\r,\n])"use strict"/g, "");
             script = script.replaceAll(/[\r,\n] *}[\r,\n] *\(function/g, "\n};\n(function"); // Color
 
             let sourcemapspattern = "sourceMappingURL=data:application/json;base64,";

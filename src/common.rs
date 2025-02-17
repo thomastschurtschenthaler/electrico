@@ -1,11 +1,10 @@
 use std::{collections::HashMap, fs::{self, File}, path::{Path, PathBuf}, thread::{self}};
 
+use hyper::{header::{ACCESS_CONTROL_ALLOW_ORIGIN, CONTENT_TYPE}, Response};
 use include_dir::{include_dir, Dir};
 use queues::{IsQueue, Queue};
-use reqwest::{header::{ACCESS_CONTROL_ALLOW_ORIGIN, CONTENT_TYPE}, StatusCode};
-use tokio::runtime::Runtime;
+use reqwest::StatusCode;
 use urlencoding::decode;
-use wry::http::{Request, Response};
 use log::{debug, info, trace, error};
 use std::io::Read;
 
@@ -54,10 +53,26 @@ fn respond_not_found(module:bool, responder:Responder) {
     }
 }
 
-pub fn handle_file_request(tokio_runtime:&Runtime, module:bool, path:String, full_path:PathBuf, resources:&HashMap<String, Vec<u8>>, responder:Responder)  {
+pub fn parse_http_url_path(path:&str) -> Option<(String, String, String, String)> {
+    let pparts:Vec<&str> = path.split("/").collect();
+    if let Some(host) = pparts.get(1) {
+        let hparts:Vec<&str> = host.split("@").collect();
+        if let Some(http_id_str) =  hparts.get(0) {
+            let http_id = http_id_str.to_string();
+            if let Some(protocol) =  hparts.get(1) {
+                if let Some(url_root) = pparts.get(2) {
+                    let url = format!("/{}", pparts[3..pparts.len()].join("/"));
+                    return Some((http_id, protocol.to_string(), url_root.to_string(), url));
+                }
+            }
+        }
+    }
+    None
+}
+
+pub fn handle_file_request(module:bool, path:String, full_path:PathBuf, resources:&HashMap<String, Vec<u8>>, responder:Responder)  {
     let resources_rt=resources.clone();
-    tokio_runtime.spawn(
-        async move {
+    
             if let Some(res) = resources_rt.get(&path) {
                 respond_status(
                     StatusCode::OK, 
@@ -90,8 +105,7 @@ pub fn handle_file_request(tokio_runtime:&Runtime, module:bool, path:String, ful
                 trace!("file not found {}", path);
                 respond_not_found(module, responder);
             }
-        }
-    );
+       
 }
 
 pub fn read_file(path:&String) -> Option<Vec<u8>> {
@@ -115,39 +129,11 @@ pub fn read_file(path:&String) -> Option<Vec<u8>> {
     }
 }
 
-pub fn get_message_data(request: &Request<Vec<u8>>) -> Option<(String, Option<Vec<u8>>)> {
-    let cmdmsg:String;
-    let data_blob:Option<Vec<u8>>;
-    if let Some(queryenc) = request.uri().query() {
-        if let Ok(query) = decode(queryenc) {
-            cmdmsg=query.to_string();
-            data_blob = Some(request.body().to_vec());
-        } else {
-            error!("url decoder error");
-            return None;
-        }
-    } else {
-        let msgr =  String::from_utf8(request.body().to_vec());
-        match msgr {
-            Ok(msg) => {
-                trace!("backend cmd request body {}", msg.as_str());
-                cmdmsg=msg;
-                data_blob=None;
-            },
-            Err(e) => {
-                error!("utf8 error {}", e);
-                return None;
-            }
-        }
-    }
-    return Some((cmdmsg, data_blob));
-}
-
-pub fn get_message_data_http(query:Option<String>, request: Vec<u8>) -> Option<(String, Option<Vec<u8>>)> {
+pub fn get_message_data_http(query:Option<&str>, request: Vec<u8>) -> Option<(String, Option<Vec<u8>>)> {
     let cmdmsg:String;
     let data_blob:Option<Vec<u8>>;
     if let Some(queryenc) = query {
-        if let Ok(query) = decode(queryenc.as_str()) {
+        if let Ok(query) = decode(queryenc) {
             cmdmsg=query.to_string();
             data_blob = Some(request);
         } else {
@@ -175,6 +161,10 @@ pub fn escape(s:&String) -> String {
     s.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n").replace("\r", "\\r")
 }
 
+pub fn escapemsg(s:&String) -> String {
+    s.replace("\\", "\\\\").replace("\"", "\\\"")
+}
+
 fn respond_http(sender: tokio::sync::mpsc::Sender<IPCResponse>, body:Vec<u8>, content_type: String, status:StatusCode) {
     thread::spawn(move || {
         let _ = sender.blocking_send(IPCResponse::new(body, content_type, status));
@@ -193,7 +183,8 @@ pub fn respond_ok(responder:Responder) {
         },
         Responder::HttpProtocol { sender } => {
             respond_http(sender, body, CONTENT_TYPE_HTML.to_string(), StatusCode::OK);
-        }
+        },
+        _=>()
     }
 }
 
@@ -209,7 +200,8 @@ pub fn respond_404(responder:Responder) {
         },
         Responder::HttpProtocol { sender } => {
             respond_http(sender, body, CONTENT_TYPE_HTML.to_string(), StatusCode::NOT_FOUND);
-        }
+        },
+        _=>()
     }
 }
 
@@ -224,7 +216,8 @@ pub fn respond_status(status:StatusCode, content_type: String, body:Vec<u8>, res
         },
         Responder::HttpProtocol { sender } => {
             respond_http(sender, body, content_type, status);
-        }
+        },
+        _=>()
     }
 }
 
@@ -239,7 +232,8 @@ pub fn respond_client_error(error:String, responder:Responder) {
         },
         Responder::HttpProtocol { sender } => {
             respond_http(sender, Vec::from(error.as_bytes()), CONTENT_TYPE_TEXT.to_string(), StatusCode::BAD_REQUEST);
-        }
+        },
+        _=>()
     }
 }
 

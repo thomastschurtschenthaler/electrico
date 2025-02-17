@@ -41,7 +41,7 @@ fn main() -> wry::Result<()> {
 
   env_logger::init_from_env(env);
   
-  let tokio_runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(50).enable_io().enable_time().build().unwrap();
+  let tokio_runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(100).enable_io().enable_time().build().unwrap();
   
   let mut rsrc_dir:PathBuf;
   let package:Package;
@@ -176,18 +176,32 @@ fn main() -> wry::Result<()> {
       Event::UserEvent(ElectricoEvents::FrontendNavigate{browser_window_id, page, preload}) => {
         
       },
+      Event::UserEvent(ElectricoEvents::FrontendConnectWS { http_id, window_id, channel, ws_sender, msg_sender }) => {
+        frontend.connect_ws(&window_id, channel, ws_sender, msg_sender);
+      },
+      Event::UserEvent(ElectricoEvents::BackendConnectWS {channel, msg_sender }) => {
+        backend.connect_ws(channel, msg_sender);
+      },
       Event::UserEvent(ElectricoEvents::ExecuteCommand{command, responder, data_blob}) => {
         trace!("backend ExecuteCommand call {:?}", command);
     
         match command {
-          Command::PostIPC { http_id, nonce, request_id, params} => {
+          Command::PostIPC { http_id, nonce, from_backend, request_id, channel, params} => {
+            if from_backend {
+              backend.call_ipc_channel("".to_string(), request_id, channel, params, data_blob);
+              return;
+            }
+            let browser_window_id = frontend.get_browser_window_id(&http_id);
             if let Responder::HttpProtocol{sender} = responder {
-              let browser_window_id = frontend.get_browser_window_id(&http_id);
-              let browser_window_id = browser_window_id.cloned();
-              let browser_window_id2 = browser_window_id.clone();
-              trace!("PostIPC {:?} {} {}", browser_window_id, request_id, params);
+              //let browser_window_id = browser_window_id.cloned();
+              trace!("PostIPC {:?} {} {} {}", browser_window_id, request_id, channel, params);
               let r_request_id = request_id.clone();
               let (ipc_sender, ipc_receiver): (Sender<IPCResponse>, Receiver<IPCResponse>) = mpsc::channel();
+              let nonce = nonce.clone();
+              if let Some(browser_window_id) = browser_window_id {
+                ipc_channel.start(browser_window_id.clone(), request_id.clone(), ipc_sender.clone());
+              }
+              let browser_window_id = browser_window_id.cloned();
               tokio_runtime.spawn(
                 async move {
                 if let Some(browser_window_id) = browser_window_id.clone() {
@@ -212,10 +226,16 @@ fn main() -> wry::Result<()> {
                   let _ = sender.send(IPCResponse::new("http_id".to_string().into_bytes(), CONTENT_TYPE_HTML.to_string(),StatusCode::FORBIDDEN)).await;
                 }
               });
-              if let Some(browser_window_id) = browser_window_id2 {
-                ipc_channel.start(browser_window_id.clone(), request_id.clone(), ipc_sender.clone());
-                backend.call_ipc_channel(browser_window_id.clone(), request_id, params, data_blob);
+              
+            }
+            if let Some(browser_window_id) = browser_window_id {
+              if let Some(nonce) = nonce {
+                if browser_window_id!=&nonce {
+                  error!("invalid nonce");
+                  return;
+                }
               }
+              backend.call_ipc_channel(browser_window_id.clone(), request_id, channel, params, data_blob);
             }
           },
           Command::FrontendGetProcessInfo { http_id, nonce } => {
@@ -226,13 +246,6 @@ fn main() -> wry::Result<()> {
               }
             }
             respond_status(StatusCode::FORBIDDEN, CONTENT_TYPE_BIN.to_string(), "http_id".to_string().into_bytes(), responder);
-          },
-          Command::FrontendGetDataBlob { id } => {
-            if let Some(data) = frontend.get_data_blob(id) {
-              respond_status(StatusCode::OK, CONTENT_TYPE_BIN.to_string(), data, responder);
-            } else {
-              respond_404(responder);
-            }
           },
           Command::FrontendGetProtocols => {
             let protocols = frontend.get_file_protocols();
@@ -261,31 +274,28 @@ fn main() -> wry::Result<()> {
             trace!("backend ExecuteCommand call SetIPCResponse {}", request_id);
             match ipc_channel.get(&request_id) {
               Some(sender) => {
+                respond_ok(responder);
                 if let Some(file_path) = file_path {
                   let mime_type = mime_guess::from_path(&file_path).first_or_octet_stream().to_string();
                   if let Some(data) = read_file(&file_path) {
                     let _ = sender.send(IPCResponse::new(data, mime_type,StatusCode::OK));
                   } else {
-                    respond_404(responder);
-                    return;
+                    let _ = sender.send(IPCResponse::new(String::from("not found").as_bytes().to_vec(), CONTENT_TYPE_HTML.to_string(),StatusCode::NOT_FOUND));
                   }
                 } else {
                   if let Some(params) = data_blob {
                     let _ = sender.send(IPCResponse::new(params, CONTENT_TYPE_JSON.to_string(), StatusCode::OK));
                   } else {
                     error!("SetIPCResponse - no data blob");
-                    respond_404(responder);
-                    return;
+                    let _ = sender.send(IPCResponse::new(String::from("not found").as_bytes().to_vec(), CONTENT_TYPE_HTML.to_string(),StatusCode::NOT_FOUND));
                   }
                 }
-                ipc_channel.end(&request_id);
-                respond_ok(responder);
               },
               None => {
-                warn!("ipc_channel - backend ExecuteCommand call SetIPCResponse request expired (timeout): {}", request_id);
                 respond_ok(responder);
               }
             }
+            ipc_channel.end(&request_id);
           },
           Command::BrowserWindowReadFile { http_id, file_path, module } => {
               let browser_window_id:String;
@@ -304,7 +314,11 @@ fn main() -> wry::Result<()> {
                         respond_status(StatusCode::FORBIDDEN, CONTENT_TYPE_HTML.to_string(), "forbidden".to_string().into_bytes(), responder);
                         return;
                     }
-                    handle_file_request(&tokio_runtime, module, file_path, file, &frontend_js_files, responder);
+                    let frontend_js_files = frontend_js_files.clone();
+                    tokio_runtime.spawn(
+                      async move {
+                          handle_file_request(module, file_path, file, &frontend_js_files, responder);
+                    });
                   },
                   None => {
                       error!("browser client access to file forbidden - no client_path_base: {}", file_path);
@@ -330,10 +344,6 @@ fn main() -> wry::Result<()> {
           },
           _ => ()
         }
-      },
-      Event::UserEvent(ElectricoEvents::SendChannelMessageRetry { browser_window_id, rid, channel, args }) => {
-        trace!("SendChannelMessageRetry");
-        frontend.send_channel_message(proxy.clone(), browser_window_id, rid, channel, args, None);
       },
       Event::UserEvent(ElectricoEvents::Exit) => {
         debug!("main Exit");

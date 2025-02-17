@@ -1,21 +1,28 @@
-use std::{any::Any, collections::HashMap, fs::File, hash::{DefaultHasher, Hash, Hasher}, path::PathBuf, sync::mpsc::{self, Receiver, Sender}};
+use std::{any::Any, collections::HashMap, convert::Infallible, fs::File, hash::{DefaultHasher, Hash, Hasher}, net::TcpListener, path::PathBuf, sync::mpsc::{self, Receiver, Sender}, thread, time::Duration};
+use bytes::{Bytes, BytesMut, BufMut};
+use fastwebsockets::{upgrade::{self}, Frame, OpCode, Payload};
+use http_body_util::{BodyExt, Full};
+use hyper::{header::ACCESS_CONTROL_ALLOW_ORIGIN, server::conn::http1, service::service_fn, Request, Response, StatusCode};
+use hyper_util::rt::TokioIo;
 use muda::MenuId;
 use notify::{Event, RecommendedWatcher};
 use substring::Substring;
 use log::{debug, error, trace};
 use include_dir::{include_dir, Dir};
 use tao::{dpi::PhysicalSize, event_loop::{EventLoop, EventLoopProxy}, window::{Window, WindowBuilder}};
-use tokio::runtime::Runtime;
+use tokio::time::timeout;
 use uuid::Uuid;
-use wry::{http::Request, RequestAsyncResponder, WebView, WebViewBuilder};
+use wry::{RequestAsyncResponder, WebView, WebViewBuilder, WebViewId};
 use serde_json::Error;
-use crate::{common::{append_js_scripts, build_file_map, escape, get_message_data, handle_file_request, is_module_request, respond_404, DataQueue}, types::{BackendCommand, ChildProcess, NETConnection, NETServer}};
+use crate::{common::{append_js_scripts, build_file_map, escape, escapemsg, get_message_data_http, handle_file_request, is_module_request, parse_http_url_path, respond_404, DataQueue}, ipcchannel::IPCResponse, types::{BackendCommand, ChannelMsg, ChildProcess, CommandMessage, NETConnection, NETServer, Responder}};
 use crate::types::{Package, ElectricoEvents, Command};
 
 pub struct Backend {
     window:Window,
     package:Package,
-    src_dir:PathBuf,
+    hash:String,
+    http_uid:String,
+    http_port:u16,
     webview:WebView,
     webviews:HashMap<String, WebView>,
     command_sender:Sender<BackendCommand>,
@@ -25,16 +32,215 @@ pub struct Backend {
     fs_files:HashMap<i64, File>,
     net_server:HashMap<String, tokio::sync::mpsc::Sender<NETServer>>,
     net_connections:HashMap<String, tokio::sync::mpsc::Sender<NETConnection>>,
-    data_queue:DataQueue,
     addon_state: HashMap<String, Box<dyn Any>>,
-    tokio_runtime:Runtime
+    msg_channels:HashMap<String, tokio::sync::mpsc::Sender<ChannelMsg>>
+}
+
+fn handle_electrico_ipc_file(host:String, path:String, src_dir:&PathBuf, backend_js_files: &HashMap<String, Vec<u8>>, sender:tokio::sync::mpsc::Sender<IPCResponse>) {
+    trace!("backend file: request {host}:{path}");
+    let fpath = path.substring(1, path.len()).to_string();
+    let file:PathBuf;
+    if fpath.starts_with("/") {
+        file = PathBuf::from(fpath.clone());
+    } else {
+        file = src_dir.join(fpath.clone());
+    } 
+    trace!("trying load file {}", file.clone().as_mut_os_str().to_str().unwrap());
+    handle_file_request(is_module_request(Some(host.as_str())), fpath, file, backend_js_files, crate::types::Responder::HttpProtocol {sender});
+}
+
+fn handle_async_electrico_cmd(proxy:EventLoopProxy<ElectricoEvents>, msg:CommandMessage, data_blob:Option<Vec<u8>>) {
+    trace!("handle_async_electrico_cmd:{:?}", msg);
+    let _ = proxy.send_event(ElectricoEvents::ExecuteCommand{command:msg.command, responder:Responder::None, data_blob});
+}
+
+fn handle_electrico_cmd(proxy:EventLoopProxy<ElectricoEvents>, path:String, query:Option<&str>, request:Vec<u8>, responder:Responder) {
+    trace!("backend cmd request {} {}", path, request.len());
+    let message_data:Option<(String, Option<Vec<u8>>)> = get_message_data_http(query, request);
+    
+    if let Some(message_data) = message_data {
+        let commandr:Result<Command, Error> = serde_json::from_str(message_data.0.as_str());
+        match commandr {
+            Ok (command) => {
+                let _ = proxy.send_event(ElectricoEvents::ExecuteCommand{command, responder, data_blob:message_data.1});
+            }
+            Err(e) => {
+                error!("json serialize error {}, {}", e.to_string(), message_data.0);
+                respond_404(responder);
+                return;
+            }
+        }
+    } else {
+        respond_404(responder);
+    }
+}
+
+#[tokio::main]
+pub async fn start_http_server(proxy:EventLoopProxy<ElectricoEvents>, tcp_listener:TcpListener, http_id:&String, src_dir:PathBuf,  backend_js_files: HashMap<String, Vec<u8>>) {
+    let listener = tokio::net::TcpListener::from_std(tcp_listener).expect("TcpListener::from_std failed");
+    loop {
+        let (stream, _) = listener.accept().await.expect("start_http_server listener.accept() failed");
+        let io = TokioIo::new(stream);
+        let proxy = proxy.clone();
+        let http_id = http_id.clone();
+        let src_dir = src_dir.clone();
+        let backend_js_files = backend_js_files.clone();
+        tokio::task::spawn(async move {
+            let service = service_fn(|mut request:Request<hyper::body::Incoming>| {
+                trace!("http server - got request: {}, {:?}", request.uri().to_string(), request.uri().authority());
+                let urlparts = parse_http_url_path(request.uri().path());
+                let http_id = http_id.clone();
+                let src_dir = src_dir.clone();
+                let proxy = proxy.clone();
+                let backend_js_files = backend_js_files.clone();
+                return async move {
+                    if let Some(urlparts) = urlparts {
+                        let url = urlparts.3.clone();
+                        let protocol = urlparts.1;
+                        if urlparts.0 != http_id {
+                            error!("http - invalid http id:{}", urlparts.0);
+                            return Ok::<_, Infallible>(Response::builder().status(StatusCode::FORBIDDEN).body(Full::new(Bytes::from(StatusCode::FORBIDDEN.to_string()))).expect("http body full failed"));
+                        }
+                        if protocol == "asyncin" || protocol == "asyncout" {
+                            let ws_channel = urlparts.2;
+                            //let (ws_sender, mut ws_receiver): (Sender<WebSocketCmd>, Receiver<WebSocketCmd>) = mpsc::channel(1000);
+                            let (msg_sender, mut msg_receiver): (tokio::sync::mpsc::Sender<ChannelMsg>, tokio::sync::mpsc::Receiver<ChannelMsg>) = tokio::sync::mpsc::channel(10000);
+                            trace!("async websocket:{protocol}");
+                            let (resp, fut) = upgrade::upgrade(&mut request).expect("upgrade::upgrade failed");
+                            tokio::task::spawn(async move {
+                                let socket = fut.await.expect("FragmentCollector failed");
+                                let mut ws = fastwebsockets::FragmentCollector::new(socket);
+                                let _ = proxy.send_event(ElectricoEvents::BackendConnectWS {channel:ws_channel, msg_sender:msg_sender});
+                                if protocol == "asyncin" {
+                                    tokio::task::unconstrained(async move {
+                                        let mut request_message_data:Option<CommandMessage> = None;
+                                        loop {
+                                            let http_id = http_id.clone();
+                                            let proxy = proxy.clone();
+                                            if let Ok(frame) =  ws.read_frame().await {
+                                                match frame.opcode {
+                                                    OpCode::Close => {
+                                                        debug!("websocket in closed");
+                                                        break;
+                                                    },
+                                                    OpCode::Binary => {
+                                                        trace!("websocket message");
+                                                        let req_msg:Vec<u8> = frame.payload.into();
+                                                        if let Some(msg) = request_message_data {
+                                                            request_message_data = None;
+                                                            handle_async_electrico_cmd(proxy, msg, Some(req_msg));
+                                                        } else {
+                                                            let command_msg:Result<CommandMessage, Error> = serde_json::from_slice(req_msg.as_slice());
+                                                            match command_msg {
+                                                                Ok (command_msg) => {
+                                                                    trace!("backend ipc call {:?}", command_msg.command);
+                                                                    if command_msg.data_blob {
+                                                                        request_message_data = Some(command_msg);
+                                                                    } else {
+                                                                        handle_async_electrico_cmd(proxy, command_msg, None);
+                                                                    }
+                                                                },
+                                                                Err(e) => {
+                                                                    error!("handle_async_ws_ipc deserialize:{e}");
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                    _ => {}
+                                                }
+                                            }
+                                        }
+                                    }).await;
+                                } else {
+                                    loop {
+                                        if let Ok(resp_msg) = timeout(Duration::from_millis(1000), msg_receiver.recv()).await {
+                                            if let Some(resp_msg) = resp_msg {
+                                                trace!("websocket write response message");
+                                                let has_data = resp_msg.data_blob.is_some();
+                                                let channel = resp_msg.channel;
+                                                let params = resp_msg.params;
+                                                let message = format!("{has_data}|{channel}|{params}");
+                                                let mut buf = BytesMut::with_capacity(message.len());
+                                                buf.put(message.as_bytes());
+                                                ws.write_frame(Frame::binary(Payload::Bytes(buf))).await.expect("ws.write_frame failed");
+                                                if let Some(data) = resp_msg.data_blob {
+                                                    let mut buf = BytesMut::with_capacity(data.len());
+                                                    buf.put(data.as_slice());
+                                                    ws.write_frame(Frame::binary(Payload::Bytes(buf))).await.expect("ws.write_frame data failed");
+                                                }
+                                            }
+                                        }
+                                        if let Ok(frame) = timeout(Duration::from_millis(1), ws.read_frame()).await {
+                                            if let Ok(frame) = frame {
+                                                if frame.opcode == OpCode::Close {
+                                                    debug!("websocket out closed");
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            });
+                            return Ok(Response::builder()
+                                .status(hyper::StatusCode::SWITCHING_PROTOCOLS)
+                                .header(hyper::header::CONNECTION, "upgrade")
+                                .header(hyper::header::UPGRADE, "websocket")
+                                .header("Sec-WebSocket-Accept", resp.headers().get("Sec-WebSocket-Accept").expect("Sec-WebSocket-Accept header failed"))
+                                .body(Full::new(Bytes::from(""))).expect("http body full failed")); 
+                        }
+                        let (req_sender, mut req_receiver): (tokio::sync::mpsc::Sender<IPCResponse>, tokio::sync::mpsc::Receiver<IPCResponse>) = tokio::sync::mpsc::channel(1000);
+                        let mut known_protocol= false;
+                        if protocol == "electrico-file" {
+                            known_protocol =true;
+                            handle_electrico_ipc_file(urlparts.2, urlparts.3, &src_dir, &backend_js_files, req_sender);
+                        } else if protocol == "cmd" {
+                            if let Ok(body) = request.body_mut().collect().await {
+                                known_protocol =true;
+                                handle_electrico_cmd(proxy, urlparts.2, request.uri().query(), body.to_bytes().to_vec(), crate::types::Responder::HttpProtocol {sender:req_sender});
+                            }
+                        } else {
+                            error!("http - no known protocol");
+                        }
+                        if known_protocol {
+                            if let Ok(r) = timeout(Duration::from_secs(300), req_receiver.recv()).await {
+                                if let Some(r) = r {
+                                    trace!("http - request response: {}", r.params.len());
+                                    let r_body = r.params; 
+                                    return Ok::<_, Infallible>(Response::builder()
+                                        .header("Content-Type", r.mime_type)
+                                        .header(ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                                        .status(r.status)
+                                        .body(Full::new(Bytes::from(r_body))).expect("http body full failed"));
+                                } else {
+                                    error!("http - request no response:{url}");
+                                }
+                            } else {
+                                error!("http - request timed out:{url}");
+                            }
+                        }
+                    }
+                    error!("http - invalid http request");
+                    return Ok::<_, Infallible>(Response::builder().status(StatusCode::BAD_REQUEST).body(Full::new(Bytes::from(StatusCode::BAD_REQUEST.to_string()))).expect("http body full failed"));
+                }
+            });
+            if let Err(err) = http1::Builder::new()
+                .keep_alive(true)
+                .serve_connection(io, service)
+                .with_upgrades()
+                .await
+            {
+                error!("Error serving connection: {:?}", err);
+            }
+        });
+    }
 }
 
 fn create_web_view (
-        window:&Window, 
+        window:&Window,
         proxy:EventLoopProxy<ElectricoEvents>,
-        backend_js_files: HashMap<String, Vec<u8>>,
-        src_dir:&PathBuf,
+        hash:&String,
+        http_uid:&String,
+        http_port:u16,
         package:&Package,
         init_script:String) -> WebView {
     let mut is_windows="false";
@@ -47,7 +253,7 @@ fn create_web_view (
         target_os = "ios",
         target_os = "android"
     ))]
-    let builder = WebViewBuilder::new(window);
+    let builder = WebViewBuilder::new();
     
     #[cfg(not(any(
         target_os = "windows",
@@ -61,56 +267,26 @@ fn create_web_view (
         let vbox = window.default_vbox().unwrap();
         WebViewBuilder::new_gtk(vbox)
     };
-    let tokio_runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(20).enable_io().enable_time().build().unwrap();
-    let src_dir_fil = src_dir.clone();
-    let fil_handler = move |request: Request<Vec<u8>>, responder:RequestAsyncResponder| {
-        let rpath = request.uri().path().to_string();
-        trace!("backend fil: request {}", rpath);
-        let fpath = rpath.substring(1, rpath.len()).to_string();
-        let file:PathBuf;
-        if fpath.starts_with("/") {
-            file = PathBuf::from(fpath.clone());
-        } else {
-            file = src_dir_fil.join(fpath.clone());
-        } 
-        trace!("trying load file {}", file.clone().as_mut_os_str().to_str().unwrap());
-        handle_file_request(&tokio_runtime, is_module_request(request.uri().host()), fpath, file, &backend_js_files, crate::types::Responder::CustomProtocol { responder });
-    };
-    let cmd_handler = move |request: Request<Vec<u8>>, responder:RequestAsyncResponder| {
+
+    let sync_cmd_handler = move |_:WebViewId, request: Request<Vec<u8>>, responder:RequestAsyncResponder| {
         let path = request.uri().path().to_string();
-        trace!("backend cmd request {} {}", path, request.body().len());
-        let message_data:Option<(String, Option<Vec<u8>>)> = get_message_data(&request);
-        
-        if let Some(message_data) = message_data {
-            let commandr:Result<Command, Error> = serde_json::from_str(message_data.0.as_str());
-            match commandr {
-                Ok (command) => {
-                    let _ = proxy.send_event(ElectricoEvents::ExecuteCommand{command, responder:crate::types::Responder::CustomProtocol { responder: responder }, data_blob:message_data.1});
-                }
-                Err(e) => {
-                    error!("json serialize error {}, {}", e.to_string(), message_data.0);
-                    respond_404(crate::types::Responder::CustomProtocol { responder });
-                    return;
-                }
-            }
-        } else {
-            respond_404(crate::types::Responder::CustomProtocol { responder });
-        }
+        trace!("sync_cmd_handler cmd request {} {}", path, request.body().len());
+        handle_electrico_cmd(proxy.clone(), path, request.uri().query(), request.body().to_vec(), crate::types::Responder::CustomProtocol { responder });
     };
     
-    let mut hasher = DefaultHasher::new();
-    format!("{}/{}", src_dir.as_os_str().to_str().unwrap(), package.main.to_string().as_str()).hash(&mut hasher);
-    let hash = format!("{}", hasher.finish());
     let main = package.main.clone();
     let pid = std::process::id();
+    debug!("webview:{http_uid},{http_port}");
     let webview = builder
-        .with_url(format!("e{hash}://file/{main}-{pid}"))
-        .with_asynchronous_custom_protocol(format!("e{}", hash).into(), fil_handler)
-        .with_asynchronous_custom_protocol("cmd".into(), cmd_handler)
+        .with_url(format!("http://{hash}.localhost:{http_port}/{http_uid}@electrico-file/file/{main}-{pid}"))
+        .with_asynchronous_custom_protocol(format!("cmd"), sync_cmd_handler)
         .with_devtools(true)
         .with_incognito(false)
-        .with_initialization_script(("window.__is_windows=".to_string()+is_windows+";"+init_script.as_str()).as_str())
-        .build().unwrap();
+        .with_initialization_script(format!(
+            "window.__is_windows={is_windows};
+            window.__http_protocol = {{'http_port':{http_port}, 'http_uid':'{http_uid}'}};
+            {init_script}").as_str())
+        .build(window).unwrap();
 
     #[cfg(debug_assertions)]
     webview.open_devtools();
@@ -143,12 +319,12 @@ impl Backend {
             .with_title("Electrico Node backend");
 
         #[cfg(target_os = "macos")] {
-            #[cfg(debug_assertions)] {
+            //#[cfg(debug_assertions)] {
                 window_builder = window_builder.with_inner_size(PhysicalSize::new(1,1));
-            }
-            #[cfg(not(debug_assertions))] {
+            //}
+            /*#[cfg(not(debug_assertions))] {
                 window_builder = window_builder.with_visible(false);
-            }
+            }*/
         }
         #[cfg(not(target_os = "macos"))] {
             window_builder = window_builder.with_visible(false);
@@ -158,14 +334,31 @@ impl Backend {
             .build(event_loop)
             .unwrap();
         
-        let webview = create_web_view(&window, proxy, backend_js_files, &src_dir, &package, init_script);
+        let mut hasher = DefaultHasher::new();
+        format!("{}/{}", src_dir.as_os_str().to_str().unwrap(), package.main.to_string().as_str()).hash(&mut hasher);
+        let hash = format!("{}", hasher.finish());
+        let http_uid = Uuid::new_v4().to_string();
+        let listener= TcpListener::bind("127.0.0.1:0").expect("start_http_server - TcpListener failed");
+        let addr = listener.local_addr().expect("listener.local_addr failed");
+        let _ = listener.set_nonblocking(true);
+        let s_proxy = proxy.clone();
+        let s_http_uid = http_uid.clone();
+        let s_src_dir = src_dir.clone();
+        let s_backend_js_files = backend_js_files.clone();
+        thread::spawn(move || {
+           start_http_server(s_proxy, listener, &s_http_uid, s_src_dir, s_backend_js_files);
+        });
+        
+        let webview = create_web_view(&window, proxy, &hash,  &http_uid, addr.port(), &package, init_script);
         
         Backend {
             window:window,
             webview:webview,
             webviews:HashMap::new(),
             package:package,
-            src_dir:src_dir,
+            hash:hash,
+            http_uid:http_uid,
+            http_port:addr.port(),
             command_sender,
             command_receiver,
             child_process: HashMap::new(),
@@ -173,9 +366,8 @@ impl Backend {
             fs_files: HashMap::new(),
             net_server: HashMap::new(),
             net_connections: HashMap::new(),
-            data_queue: DataQueue::new(),
             addon_state: HashMap::new(),
-            tokio_runtime:tokio::runtime::Builder::new_multi_thread().worker_threads(20).enable_io().enable_time().build().unwrap()
+            msg_channels:HashMap::new()
         }
     }
     pub fn addon_state_insert<T: 'static>(&mut self, cid:&String, c:T) {
@@ -195,23 +387,27 @@ impl Backend {
     pub fn command_callback(&mut self, command:String, message:String) {
         let _ = self.webview.evaluate_script(format!("window.__electrico.callback['{}']('{}')", command, message).as_str());
     }
-    pub fn call_ipc_channel(&mut self, browser_window_id:String, request_id:String, params:String, data_blob:Option<Vec<u8>>) {
-         let request_id2 = request_id.clone();
-         trace!("call_ipc_channel {} {}", &request_id2, &params);
-         if let Some(data) = data_blob {
-            if self.data_queue.add(&request_id, data) {
-                return;
-            }
+    pub fn call_ipc_channel(&mut self, browser_window_id:String, request_id:String, channel: String, params:String, data_blob:Option<Vec<u8>>) {
+        trace!("call_ipc_channel {} {}", &request_id, &params);
+        let args = format!("{{\"browser_window_id\":\"{browser_window_id}\", \"request_id\":\"{request_id}\", \"params\":\"{}\"}}", escapemsg(&params));
+        if let Some(sender) = self.msg_channels.get(&request_id) {
+            // send to remote window
+            debug!("send to remote window");
+            let _ = sender.blocking_send(ChannelMsg {channel, params:args, data_blob:data_blob});
+        } else {
+            self.send_channel_message(format!("ipc_{channel}"), args, data_blob);
         }
-        let retry_sender = self.command_sender.clone();
-         _ = self.webview.evaluate_script_with_callback(
-            format!("window.__electrico.callIPCChannel('{}', '{}', '{}');", browser_window_id, request_id, escape(&params)).as_str()
-            , move |r| {
-                if r.len()==0 {
-                    trace!("call_ipc_channel not OK - resending");
-                    let _ = retry_sender.send(BackendCommand::IPCCall { browser_window_id:browser_window_id.clone(), request_id:request_id.clone(), params:params.clone() });
-                }
-        });
+    }
+    pub fn connect_ws(&mut self, channel:String, msg_sender:tokio::sync::mpsc::Sender<ChannelMsg>) {
+        self.msg_channels.insert(channel.clone(), msg_sender);
+        self.send_channel_message("ipc_connect".to_string(), channel, None)
+    }
+    pub fn send_channel_message(&mut self, channel:String, args:String, data:Option<Vec<u8>>) {
+        if let Some(sender) = self.msg_channels.get("ipcout") {
+            let _ = sender.blocking_send(ChannelMsg {channel, params:args, data_blob:data});
+        } else {
+            error!("send_channel_message - ipcout websocket not there");
+        }
     }
     pub fn window_close(&mut self, id:&Option<String>) {
         if let Some(id) = id {
@@ -238,59 +434,27 @@ impl Backend {
             if let Some(sender) = self.child_process.get(&pid) {
               trace!("ChildProcessData stdin {} {:?}", pid, data);
             let sender = sender.clone();
-            self.tokio_runtime.spawn(async move {
-                let _ = sender.send(ChildProcess::StdinWrite {data, end}).await;
-            });
+            let _ = sender.blocking_send(ChildProcess::StdinWrite {data, end});
             }
         } else {
             trace!("child_process_callback {} {}", stream, pid);
-            if let Some(data) = data {
-                let data_key = pid.clone()+stream.as_str();
-                if self.data_queue.add(&data_key, data) {
-                    return;
-                }
-            }
-            let retry_sender = self.command_sender.clone();
-            let _ = self.webview.evaluate_script_with_callback(&format!("window.__electrico.call(()=>{{window.__electrico.child_process.callback.on_{}('{}');}});", stream, pid), move |r| {
-                if r.len()==0 {
-                    trace!("child_process_callback not OK - resending");
-                    let _ = retry_sender.send(BackendCommand::ChildProcessCallback { pid:pid.clone(), end, stream:stream.clone(), data:None });
-                }
-            });
+            self.send_channel_message(format!("cp_data_{pid}"), stream, data);
         }
     }
     pub fn child_process_exit(&mut self, pid:String, exit_code:Option<i32>) {
-        let call_script:String;
+        let args:String;
         if let Some(exit_code) = exit_code {
-            call_script=format!("window.__electrico.child_process.callback.on_close('{}', {});", pid, exit_code.to_string());
+            args=format!("{exit_code}");
         } else {
-            call_script=format!("window.__electrico.child_process.callback.on_close('{}');", pid);
+            args=format!("");
         }
-        let retry_sender = self.command_sender.clone();
-        if self.data_queue.size(&(pid.clone()+"stdout")) == 0 && self.data_queue.size(&(pid.clone()+"stderr")) == 0 {
-            let _ = self.webview.evaluate_script_with_callback(&format!("window.__electrico.call(()=>{{{}}});", call_script.as_str()), move |r| {
-                if r.len()==0 {
-                    trace!("child_process_exit not OK - resending");
-                    let _ = retry_sender.send(BackendCommand::ChildProcessExit { pid: pid.clone(), exit_code: exit_code.clone() });
-                }
-            });
-        } else {
-            trace!("still stdout/stderr data on queue - call exit later {}", pid);
-            let _ = retry_sender.send(BackendCommand::ChildProcessExit { pid: pid.clone(), exit_code: exit_code.clone() });
-        }
+        self.send_channel_message(format!("cp_exit_{pid}"), args, None);
     }
     pub fn fs_watch_callback(&mut self, wid:String, event:Event) {
-        let call_script = format!("window.__electrico.fs_watcher.on_event('{}', '{:?}', '{}')",
-            wid, 
-            event.kind,
-            escape(&event.paths.iter().map(|x| x.as_os_str().to_str().unwrap()).collect::<Vec<_>>().join(";")));
-        let retry_sender = self.command_sender.clone();
-        let _ = self.webview.evaluate_script_with_callback(&format!("window.__electrico.call(()=>{{{}}});", call_script.as_str()), move |r| {
-            if r.len()==0 {
-                trace!("fs_watch_callback not OK - resending");
-                let _ = retry_sender.send(BackendCommand::FSWatchEvent { wid:wid.clone(), event:event.clone() });
-            }
-        });
+        let args = format!("{{\"kind\":\"{:?}\", \"filenames\":\"{}\"}}",
+                event.kind,
+                escapemsg(&event.paths.iter().map(|x| x.as_os_str().to_str().unwrap()).collect::<Vec<_>>().join(";")));
+        self.send_channel_message(format!("fsw_{wid}"), args, None);
     }
     pub fn command_sender(&mut self) -> Sender<BackendCommand> {
         self.command_sender.clone()
@@ -303,18 +467,14 @@ impl Backend {
         trace!("child_process_disconnect {}", pid);
         if let Some(sender) = self.child_process.get(&pid) {
             let sender = sender.clone();
-            self.tokio_runtime.spawn(async move {
-                let _ = sender.send(ChildProcess::Disconnect).await;
-            });
+            let _ = sender.blocking_send(ChildProcess::Disconnect);
         }
     }
     pub fn child_process_kill(&mut self, pid:String) {
         trace!("child_process_kill {}", pid);
         if let Some(sender) = self.child_process.get(&pid) {
             let sender = sender.clone();
-            self.tokio_runtime.spawn(async move {
-                let _ = sender.send(ChildProcess::Kill).await;
-            });
+            let _ = sender.blocking_send(ChildProcess::Kill);
         }
     }
     pub fn fs_open(&mut self, fd:i64, file:File) {
@@ -342,15 +502,9 @@ impl Backend {
         }
     }
     pub fn net_server_conn_start(&mut self, hook:String, id:String, sender:tokio::sync::mpsc::Sender<NETConnection>) {
-        let call_script=format!("window.__electrico.net_server.callback.on_start('{}', '{}');", hook, id);
         self.net_connections.insert(id.clone(), sender.clone());
-        let retry_sender = self.command_sender.clone();
-        let _ = self.webview.evaluate_script_with_callback(&format!("window.__electrico.call(()=>{{{}}});", call_script.as_str()), move |r| {
-            if r.len()==0 {
-                trace!("net_server_conn_start not OK - resending");
-                let _ = retry_sender.send(BackendCommand::NETServerConnStart { hook:hook.clone(), id:id.clone(), sender:sender.clone()});
-            }
-        });
+        debug!("net_server_conn_start:{}", self.net_connections.len());
+        self.send_channel_message(format!("net_start_{id}"), hook, None);
     }
     pub fn net_server_close(&mut self, id:String) {
         if let Some(sender) = self.net_server.get(&id) {
@@ -367,46 +521,22 @@ impl Backend {
         self.net_connections.insert(id.clone(), sender.clone());
     }
     pub fn net_connection_data(&mut self, id:String, data:Option<Vec<u8>>) {
-        if let Some(data) = data {
-            if  self.data_queue.add(&id, data) {
-                return;
-            }
-        }
-        let call_script=format!("window.__electrico.net_server.callback.on_data('{}');", id);
-        let retry_sender = self.command_sender.clone();
-        let _ = self.webview.evaluate_script_with_callback(&format!("window.__electrico.call(()=>{{{}}});", call_script.as_str()), move |r| {
-            if r.len()==0 {
-                trace!("net_connection_data not OK - resending");
-                let _ = retry_sender.send(BackendCommand::NETConnectionData { id:id.clone(), data:None });
-            }
-        });
+        self.send_channel_message(format!("net_data"), id, data);
     }
     pub fn net_connection_end(&mut self, id:String) {
         if let Some(sender) = self.net_connections.get(&id) {
             let _ = sender.send(NETConnection::Disconnect);
             self.net_connections.remove(&id);
         }
-        let call_script=format!("window.__electrico.net_server.callback.on_end('{}');", id);
-        let retry_sender = self.command_sender.clone();
-        
-        if self.data_queue.size(&id) == 0 {
-            let _ = self.webview.evaluate_script_with_callback(&format!("window.__electrico.call(()=>{{{}}});", call_script.as_str()), move |r| {
-                if r.len()==0 {
-                    trace!("net_connection_end not OK - resending");
-                    let _ = retry_sender.send(BackendCommand::NETConnectionEnd { id:id.clone()});
-                }
-            });
-        } else {
-            debug!("still connection data on queue - call end later");
-            let _ = retry_sender.send(BackendCommand::NETConnectionEnd { id:id.clone()});
-        }
+        self.send_channel_message(format!("net_end"), id, None);
     }
-    pub fn net_write_connection(&mut self, id:String, data:Vec<u8>) {
+    pub fn net_write_connection(&mut self, id:String, end:bool, data:Vec<u8>) {
         if let Some(sender) = self.net_connections.get(&id) {
             let sender = sender.clone();
-            self.tokio_runtime.spawn(async move {
-                let _ = sender.send(NETConnection::Write { data }).await;
-            });
+            let _ = sender.blocking_send(NETConnection::Write { data, end});
+            if end {
+                self.net_connections.remove(&id);
+            }
         } else {
             error!("net_write_connection no sender for id {}", id);
         }
@@ -414,26 +544,15 @@ impl Backend {
     pub fn net_set_timeout(&mut self, id:String, timeout:u128) {
         if let Some(sender) = self.net_connections.get(&id) {
             let sender = sender.clone();
-            self.tokio_runtime.spawn(async move {
-                let _ = sender.send(NETConnection::SetTimeout { timeout:Some(timeout) }).await;
-            });
+            let _ = sender.blocking_send(NETConnection::SetTimeout { timeout:Some(timeout) });
         } else {
-            error!("net_write_connection no sender for id {}", id);
+            error!("net_set_timeout no sender for id {}", id);
         }
     }
-    pub fn get_data_blob(&mut self, id:String) -> Option<Vec<u8>> {
-        let data:Option<Vec<u8>>;
-        if let Some(d) = self.data_queue.take(&id) {
-            data = Some(d.to_vec());
-        } else {
-            data = None;
-        };
-        return data;
-    }
     pub fn execute_sync(&mut self, proxy:EventLoopProxy<ElectricoEvents>, script:String, sender:Sender<(bool, Vec<u8>)>) {
-        let (backend_js_files, backendjs) = backend_resources(&self.package);
-        let init_script = format!("{}\nwindow.__electrico.loadMain();", backendjs);
-        let webview = create_web_view(&self.window, proxy, backend_js_files, &self.src_dir, &self.package, init_script);
+        let (_, backendjs) = backend_resources(&self.package);
+        let init_script = format!("window._no_websocket=true;\n{}\nwindow.__electrico.loadMain();", backendjs);
+        let webview = create_web_view(&self.window, proxy, &self.hash, &self.http_uid, self.http_port, &self.package, init_script);
         let uuid = Uuid::new_v4().to_string();
         let _ = webview.evaluate_script(format!("{script}.then(r=>{{$e_node.syncExecuteSyncResponse({{'uuid':'{uuid}', 'data':r+''}});}}).catch(e=>{{$e_node.syncExecuteSyncResponse({{'uuid':'{uuid}', 'error':e+''}});}});").as_str());
         self.addon_state_insert(&uuid, sender);
@@ -456,9 +575,6 @@ impl Backend {
     pub fn process_commands(&mut self) {
         if let Ok(command) = self.command_receiver.try_recv() {
             match command {
-                BackendCommand::IPCCall { browser_window_id, request_id, params } => {
-                    self.call_ipc_channel(browser_window_id, request_id, params, None);
-                },
                 BackendCommand::ChildProcessCallback { pid, stream, end, data } => {
                     trace!("ChildProcessCallback");
                     self.child_process_callback(pid, stream, end, data);
