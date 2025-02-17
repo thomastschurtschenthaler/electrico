@@ -247,26 +247,9 @@ fn create_web_view (
     #[cfg(target_os = "windows")] {
         is_windows = "true";
     }
-    #[cfg(any(
-        target_os = "windows",
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "android"
-    ))]
+    
     let builder = WebViewBuilder::new();
     
-    #[cfg(not(any(
-        target_os = "windows",
-        target_os = "macos",
-        target_os = "ios",
-        target_os = "android"
-    )))]
-    let builder = {
-        use tao::platform::unix::WindowExtUnix;
-        use wry::WebViewBuilderExtUnix;
-        let vbox = window.default_vbox().unwrap();
-        WebViewBuilder::new_gtk(vbox)
-    };
 
     let sync_cmd_handler = move |_:WebViewId, request: Request<Vec<u8>>, responder:RequestAsyncResponder| {
         let path = request.uri().path().to_string();

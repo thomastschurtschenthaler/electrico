@@ -50,9 +50,10 @@ portable-pty = {version = "0.9.0"}
 hyper = {version = "1.6.0", features = ["full"] }
 hyper-util = {version = "0.1.10", features = ["full"]}
 http-body-util = {version = "0.1.2"}
-futures-util = {version = "0.3.31"}
+futures-util = {version = "0.3.31", features = ["io"]}
 bytes = {version = "1.10.0"}
 fastwebsockets = {version = "0.10.0", features = ["upgrade"]}
 
 [target."cfg(any(target_os = \"linux\", target_os = \"dragonfly\", target_os = \"freebsd\", target_os = \"openbsd\", target_os = \"netbsd\"))".dependencies]
 webkit2gtk = { version = "=2.0.1", features = [ "v2_40" ]}
+openssl = { version = "0.10", features = ["vendored"] }

@@ -433,26 +433,7 @@ impl Frontend {
             is_windows = "true";
         }
 
-        #[cfg(any(
-            target_os = "windows",
-            target_os = "macos",
-            target_os = "ios",
-            target_os = "android"
-        ))]
         let mut webview_builder = WebViewBuilder::new();
-    
-        #[cfg(not(any(
-            target_os = "windows",
-            target_os = "macos",
-            target_os = "ios",
-            target_os = "android"
-        )))]
-        let mut webview_builder = {
-            use tao::platform::unix::WindowExtUnix;
-            use wry::WebViewBuilderExtUnix;
-            let vbox = window.default_vbox().unwrap();
-            WebViewBuilder::new_gtk(vbox)
-        };
         
         let http_uid = Uuid::new_v4().to_string();
         debug!("frontend create_window - http_uid:{http_uid}");
