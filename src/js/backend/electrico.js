@@ -101,7 +101,7 @@ var __electrico_nonce=null;
                         req.timeout=600000;
                     }
                     if (bin) {
-                        if (url.startsWith("http://")) {
+                        if (!async && url.startsWith("http://")) {
                             req.overrideMimeType("text/plain; charset=x-user-defined");
                         } else {
                             req.responseType = "arraybuffer";
