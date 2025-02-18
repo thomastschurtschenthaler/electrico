@@ -247,9 +247,6 @@ fn create_web_view (
     #[cfg(target_os = "windows")] {
         is_windows = "true";
     }
-    
-    let builder = WebViewBuilder::new();
-    
 
     let sync_cmd_handler = move |_:WebViewId, request: Request<Vec<u8>>, responder:RequestAsyncResponder| {
         let path = request.uri().path().to_string();
@@ -260,7 +257,7 @@ fn create_web_view (
     let main = package.main.clone();
     let pid = std::process::id();
     debug!("webview:{http_uid},{http_port}");
-    let webview = builder
+    let builder = WebViewBuilder::new()
         .with_url(format!("http://{hash}.localhost:{http_port}/{http_uid}@electrico-file/file/{main}-{pid}"))
         .with_asynchronous_custom_protocol(format!("cmd"), sync_cmd_handler)
         .with_devtools(true)
@@ -268,9 +265,28 @@ fn create_web_view (
         .with_initialization_script(format!(
             "window.__is_windows={is_windows};
             window.__http_protocol = {{'http_port':{http_port}, 'http_uid':'{http_uid}'}};
-            {init_script}").as_str())
-        .build(window).unwrap();
-
+            {init_script}").as_str());
+            
+    #[cfg(any(
+        target_os = "windows",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "android"
+    ))]
+    let webview = builder.build(window).unwrap();
+    #[cfg(not(any(
+        target_os = "windows",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "android"
+    )))]
+    let webview = {
+        use tao::platform::unix::WindowExtUnix;
+        use wry::WebViewBuilderExtUnix;
+        let vbox = window.default_vbox().unwrap();
+        builder.build_gtk(vbox).unwrap()
+    };
+    
     #[cfg(debug_assertions)]
     webview.open_devtools();
     webview

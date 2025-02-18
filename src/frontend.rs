@@ -446,12 +446,32 @@ impl Frontend {
                 var require=document.window.require;\n{preload_script}\nph.after();\n}};\n
                 {frontendalljs}\n
                 __electrico_nonce='';\n");
-        let webview = webview_builder
+        let builder = webview_builder
             .with_initialization_script(init_script.as_str())
             .with_navigation_handler(nav_handler)
             .with_devtools(true)
-            .with_clipboard(true)
-            .build(&window).unwrap();
+            .with_clipboard(true);
+        
+        #[cfg(any(
+            target_os = "windows",
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "android"
+        ))]
+        let webview = builder.build(window).unwrap();
+        #[cfg(not(any(
+            target_os = "windows",
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "android"
+        )))]
+        let webview = {
+            use tao::platform::unix::WindowExtUnix;
+            use wry::WebViewBuilderExtUnix;
+            let vbox = window.default_vbox().unwrap();
+            builder.build_gtk(vbox).unwrap()
+        };
+
         #[cfg(debug_assertions)]
         webview.open_devtools();
 
