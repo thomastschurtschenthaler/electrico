@@ -458,7 +458,7 @@ impl Frontend {
             target_os = "ios",
             target_os = "android"
         ))]
-        let webview = builder.build(window).unwrap();
+        let webview = builder.build(&window).unwrap();
         #[cfg(not(any(
             target_os = "windows",
             target_os = "macos",
