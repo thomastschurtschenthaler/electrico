@@ -116,7 +116,6 @@ pub enum Responders {
 }
 
 pub enum Responder {
-  CustomProtocol {responder:RequestAsyncResponder},
   HttpProtocol {sender:Sender<IPCResponse>},
   None
 }

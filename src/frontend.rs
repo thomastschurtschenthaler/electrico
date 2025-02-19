@@ -164,7 +164,7 @@ impl Frontend {
                         if let Some((http_id, protocol, url_root, url)) = urlparts {
                             trace!("http_server processing request:{http_id}, {protocol}, {url_root}, {url}");
                             if protocol == "asyncin" || protocol == "asyncout" {
-                                let (ws_sender, mut ws_receiver): (Sender<WebSocketCmd>, Receiver<WebSocketCmd>) = mpsc::channel(1000);
+                                let (ws_sender, _): (Sender<WebSocketCmd>, Receiver<WebSocketCmd>) = mpsc::channel(1000);
                                 let (msg_sender, mut msg_receiver): (Sender<ChannelMsg>, Receiver<ChannelMsg>) = mpsc::channel(10000);
                     
                                 trace!("async websocket:{},{}", protocol, url_root);

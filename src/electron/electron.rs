@@ -10,7 +10,7 @@ use super::{apis::apis::process_command, menu::create_menu, types::{BrowserWindo
 
 pub fn process_electron_command(tokio_runtime:&Runtime, event_loop:&EventLoopWindowTarget<ElectricoEvents>, proxy:EventLoopProxy<ElectricoEvents>,
     app_env:&mut AppEnv, rsrc_dir:&PathBuf, package:&Package,
-    frontend:&mut Frontend, backend:&mut Backend, ipc_channel:&mut IPCChannel,
+    frontend:&mut Frontend, backend:&mut Backend, _ipc_channel:&mut IPCChannel,
     command:ElectronCommand,responder:Responder, data_blob:Option<Vec<u8>>) -> Option<Menu> {
     let mut menu_ret: Option<Menu> = None;
     match command {

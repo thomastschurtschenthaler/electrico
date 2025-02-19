@@ -1,4 +1,4 @@
-use std::{fmt::Debug, io::{BufRead, BufReader}, process::{ChildStdin, Command, Stdio}, time::Duration};
+use std::{io::{BufRead, BufReader}, process::{ChildStdin, Command, Stdio}, time::Duration};
 use log::{error, debug, trace};
 use reqwest::StatusCode;
 use tao::event_loop::EventLoopProxy;

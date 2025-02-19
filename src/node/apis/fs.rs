@@ -11,7 +11,7 @@ use crate::{backend::Backend, common::{respond_404, respond_ok, respond_status, 
 
 use super::types::{FSCommand, FSStat};
 
-pub fn process_fs_command(tokio_runtime:&Runtime, _app_env:&AppEnv,
+pub fn process_fs_command(_:&Runtime, _app_env:&AppEnv,
     proxy:EventLoopProxy<ElectricoEvents>,
     backend:&mut Backend,
     command:FSCommand,

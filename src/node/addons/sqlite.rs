@@ -2,11 +2,10 @@ use std::collections::HashMap;
 
 use log::debug;
 use reqwest::StatusCode;
-use rusqlite::{params_from_iter, Connection, Result};
+use rusqlite::{params_from_iter, Connection};
 use tao::event_loop::EventLoopProxy;
 use tokio::runtime::Runtime;
 use uuid::Uuid;
-use wry::RequestAsyncResponder;
 
 use crate::{backend::Backend, common::{respond_ok, respond_status, CONTENT_TYPE_JSON, CONTENT_TYPE_TEXT}, node::node::AppEnv, types::{ElectricoEvents, Responder}};
 

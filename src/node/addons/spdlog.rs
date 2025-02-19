@@ -1,8 +1,7 @@
 use std::sync::Arc;
-use spdlog::{critical, debug, error, info, sink::{FileSink, Sink}, trace, warn, Logger};
+use spdlog::{critical, debug, error, info, sink::FileSink, trace, warn, Logger};
 use tao::event_loop::EventLoopProxy;
 use tokio::runtime::Runtime;
-use wry::RequestAsyncResponder;
 use crate::{backend::Backend, common::{respond_404, respond_ok}, node::node::AppEnv, types::{ElectricoEvents, Responder}};
 use super::types::SPDLogCommand;
 

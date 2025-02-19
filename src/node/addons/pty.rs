@@ -5,9 +5,8 @@ use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use reqwest::StatusCode;
 use tao::event_loop::EventLoopProxy;
 use tokio::{runtime::Runtime, sync::mpsc::{self, Receiver, Sender}, time::timeout};
-use wry::RequestAsyncResponder;
 
-use crate::{backend::Backend, common::{respond_404, respond_ok, respond_status, CONTENT_TYPE_TEXT}, node::{common::send_command, node::AppEnv}, types::{BackendCommand, ChildProcess, ElectricoEvents, Responder}};
+use crate::{backend::Backend, common::{respond_404, respond_status, CONTENT_TYPE_TEXT}, node::{common::send_command, node::AppEnv}, types::{BackendCommand, ChildProcess, ElectricoEvents, Responder}};
 
 use super::types::PTYCommand;
 

@@ -1,21 +1,20 @@
 
-use log::{error, debug, trace};
 use reqwest::StatusCode;
 use rfd::{MessageButtons, MessageLevel};
 use tao::event_loop::EventLoopProxy;
 use tokio::runtime::Runtime;
 
-use crate::{backend::Backend, common::{respond_404, respond_ok, respond_status, CONTENT_TYPE_BIN, CONTENT_TYPE_JSON, CONTENT_TYPE_TEXT}, frontend::Frontend, node::{apis::types::FSDirent, common::send_command, node::AppEnv}, types::{BackendCommand, ElectricoEvents, Responder}};
+use crate::{backend::Backend, common::{respond_ok, respond_status, CONTENT_TYPE_JSON, CONTENT_TYPE_TEXT}, frontend::Frontend, node::node::AppEnv, types::{ElectricoEvents, Responder}};
 
 use super::types::DialogCommand;
 
 pub fn process_dialog_command(tokio_runtime:&Runtime, _app_env:&AppEnv,
-    proxy:EventLoopProxy<ElectricoEvents>,
-    backend:&mut Backend,
+    _proxy:EventLoopProxy<ElectricoEvents>,
+    _backend:&mut Backend,
     frontend:&mut Frontend,
     command:DialogCommand,
     responder:Responder,
-    data_blob:Option<Vec<u8>>)  {
+    _data_blob:Option<Vec<u8>>)  {
     
     match command {
         DialogCommand::ShowOpenDialogSync { options } => {
@@ -139,7 +138,6 @@ pub fn process_dialog_command(tokio_runtime:&Runtime, _app_env:&AppEnv,
                             } else {
                                 match fd.pick_file().await {
                                     Some(sel) => {
-                                        let mut p:Vec<String> = Vec::new();
                                         picked.push(sel.path().as_os_str().to_str().unwrap().to_string());
                                     },
                                     None => {}

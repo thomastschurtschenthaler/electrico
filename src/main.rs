@@ -15,11 +15,11 @@ use serde_json::Error;
 use backend::Backend;
 use frontend::Frontend;
 use ipcchannel::{IPCChannel, IPCResponse};
-use log::{debug, error, info, trace, warn};
+use log::{debug, error, trace, warn};
 use node::node::{process_node_command, AppEnv};
 use reqwest::StatusCode;
 use tao::event_loop::EventLoopBuilder;
-use common::{build_file_map, escape, handle_file_request, read_file, respond_404, respond_ok, respond_status, CONTENT_TYPE_BIN, CONTENT_TYPE_HTML, CONTENT_TYPE_JSON, CONTENT_TYPE_TEXT, JS_DIR_FRONTEND};
+use common::{build_file_map, escape, handle_file_request, read_file, respond_ok, respond_status, CONTENT_TYPE_BIN, CONTENT_TYPE_HTML, CONTENT_TYPE_JSON, CONTENT_TYPE_TEXT, JS_DIR_FRONTEND};
 use tempfile::TempDir;
 use types::{Command, ElectricoEvents, ForkParams, Package, Resources, Responder};
 use tao::{event::{Event, StartCause, WindowEvent},event_loop::{ControlFlow, EventLoop}};
@@ -341,8 +341,7 @@ fn main() -> wry::Result<()> {
           },
           Command::Node { invoke } => {
             process_node_command(&tokio_runtime, &app_env, proxy.clone(), &mut backend, invoke, responder, data_blob);
-          },
-          _ => ()
+          }
         }
       },
       Event::UserEvent(ElectricoEvents::Exit) => {

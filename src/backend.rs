@@ -12,9 +12,9 @@ use include_dir::{include_dir, Dir};
 use tao::{dpi::PhysicalSize, event_loop::{EventLoop, EventLoopProxy}, window::{Window, WindowBuilder}};
 use tokio::time::timeout;
 use uuid::Uuid;
-use wry::{RequestAsyncResponder, WebView, WebViewBuilder, WebViewId};
+use wry::{WebView, WebViewBuilder};
 use serde_json::Error;
-use crate::{common::{append_js_scripts, build_file_map, escape, escapemsg, get_message_data_http, handle_file_request, is_module_request, parse_http_url_path, respond_404, DataQueue}, ipcchannel::IPCResponse, types::{BackendCommand, ChannelMsg, ChildProcess, CommandMessage, NETConnection, NETServer, Responder}};
+use crate::{common::{append_js_scripts, build_file_map, escape, escapemsg, get_message_data_http, handle_file_request, is_module_request, parse_http_url_path, respond_404}, ipcchannel::IPCResponse, types::{BackendCommand, ChannelMsg, ChildProcess, CommandMessage, NETConnection, NETServer, Responder}};
 use crate::types::{Package, ElectricoEvents, Command};
 
 pub struct Backend {
@@ -115,7 +115,6 @@ pub async fn start_http_server(proxy:EventLoopProxy<ElectricoEvents>, tcp_listen
                                     tokio::task::unconstrained(async move {
                                         let mut request_message_data:Option<CommandMessage> = None;
                                         loop {
-                                            let http_id = http_id.clone();
                                             let proxy = proxy.clone();
                                             if let Ok(frame) =  ws.read_frame().await {
                                                 match frame.opcode {
@@ -284,6 +283,7 @@ fn create_web_view (
     webview.open_devtools();
     webview
 }
+
 
 fn backend_resources (package:&Package) -> (HashMap<String, Vec<u8>>, String) {
     let mut backendjs:String = String::new();
@@ -541,28 +541,18 @@ impl Backend {
             error!("net_set_timeout no sender for id {}", id);
         }
     }
-    pub fn execute_sync(&mut self, proxy:EventLoopProxy<ElectricoEvents>, script:String, sender:Sender<(bool, Vec<u8>)>) {
+    pub fn execute_sync(&mut self, proxy:EventLoopProxy<ElectricoEvents>, script:String) -> String {
         let (_, backendjs) = backend_resources(&self.package);
         let init_script = format!("window._no_websocket=true;\n{}\nwindow.__electrico.loadMain();", backendjs);
         let webview = create_web_view(&self.window, proxy, &self.hash, &self.http_uid, self.http_port, &self.package, init_script);
         let uuid = Uuid::new_v4().to_string();
         let _ = webview.evaluate_script(format!("{script}.then(r=>{{$e_node.syncExecuteSyncResponse({{'uuid':'{uuid}', 'data':r+''}});}}).catch(e=>{{$e_node.syncExecuteSyncResponse({{'uuid':'{uuid}', 'error':e+''}});}});").as_str());
-        self.addon_state_insert(&uuid, sender);
-        self.webviews.insert(uuid, webview);
+        self.webviews.insert(uuid.clone(), webview);
+        return uuid;
     }
     pub fn execute_sync_response(&mut self, uuid:String, data:Option<String>, error:Option<String>) {
         self.webviews.remove(&uuid);
-        let sender:Option<&mut Sender<(bool, Vec<u8>)>> = self.addon_state_get_mut(&uuid);
-        if let Some(sender) = sender {
-            if let Some(data) = data {
-                let _ = sender.send((true, data.as_bytes().to_vec()));
-            } else if let Some(error) = error {
-                let _ = sender.send((false, error.as_bytes().to_vec()));
-            } else {
-                let _ = sender.send((false, "no vaild response".as_bytes().to_vec()));
-            }
-        }
-        self.addon_state_remove(&uuid);
+        self.addon_state_insert(&uuid, (data, error)); 
     }
     pub fn process_commands(&mut self) {
         if let Ok(command) = self.command_receiver.try_recv() {

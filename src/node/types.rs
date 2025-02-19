@@ -31,10 +31,11 @@ pub enum NodeCommand {
   GetProcessInfo,
   GetStartArgs,
   ExecuteSync {script: String},
+  WaitExecuteSync {id: String, duration: u64},
   ExecuteSyncResponse {uuid: String, data:Option<String>, error:Option<String>},
   ChannelSendMessage {channel: String, args: String},
   Addon {data: String},
-  Api {data: String}
+  Api {data: String},
 }
 
 #[derive(Default)]

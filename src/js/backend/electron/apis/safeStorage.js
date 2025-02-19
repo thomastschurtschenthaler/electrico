@@ -60,6 +60,16 @@
             cb(e);
         }
     }
+    let waitForResponse = function(id) {
+        while (true) {
+            try {
+                let {r, e} = $e_node.syncWaitExecuteSync({"id":id, "duration": 500});
+                if (e!="busy") {
+                    return {r, e};
+                }
+            } catch (e) {}
+        }
+    }
     let safeStorage = {
         isEncryptionAvailableAsync: async function() {
             return new Promise((res, rej)=> {
@@ -121,20 +131,30 @@
         encryptString: function(text) {
             let script = '(async function() {let _req=require; return await _req("electron").safeStorage.encryptStringAsync(\''+text.replaceAll("'", "\'").replaceAll("\r", "\\r").replaceAll("\n", "\\n")+'\');})()';
             let {r, e} = $e_node.syncExecuteSync({"script":script});
-            if (e!=null) throw "encryptString error: "+e;
-            r = Buffer.from(r).toString();
-            if (r.trim().length==0) throw "encryptString error: no key";
-            let res = Buffer.from(r, "base64");
-            return res;
+            if (e!=null) throw e;
+            let id = r;
+            {
+                let {r, e} = waitForResponse(id);
+                if (e!=null) throw "encryptString error: "+e;
+                r = Buffer.from(r).toString();
+                if (r.trim().length==0) throw "encryptString error: no key";
+                let res = Buffer.from(r, "base64");
+                return res;
+            }
         },
         decryptString: function(buffer) {
             let bufferbase64 = buffer.toString("base64");
             let script = '(async function() {let _req=require; return await _req("electron").safeStorage.decryptStringAsync(\''+bufferbase64+'\');})()';
             let {r, e} = $e_node.syncExecuteSync({"script":script});
-            if (e!=null) throw "decryptString error: "+e;
-            r = Buffer.from(r).toString();
-            if (r.trim().length==0) throw "decryptString error: no key";
-            return r;
+            if (e!=null) throw e;
+            let id = r;
+            {
+                let {r, e} = waitForResponse(id);
+                if (e!=null) throw "decryptString error: "+e;
+                r = Buffer.from(r).toString();
+                if (r.trim().length==0) throw "decryptString error: no key";
+                return r;
+            }
         },
     };
     window.__electrico.libs["electron"].safeStorage = safeStorage;

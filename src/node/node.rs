@@ -1,11 +1,11 @@
-use std::{collections::HashMap, env, sync::mpsc::{self, Receiver, Sender}};
+use std::{collections::HashMap, env, thread, time::Duration};
 use log::{debug, error, info, trace, warn};
 use reqwest::StatusCode;
 use tao::event_loop::EventLoopProxy;
 use tokio::runtime::Runtime;
 use wry::webview_version;
 
-use crate::{backend::Backend, common::{respond_404, respond_client_error, respond_ok, respond_status, CONTENT_TYPE_BIN, CONTENT_TYPE_JSON, CONTENT_TYPE_TEXT}, node::types::{Process, ProcessVersions}, types::{ElectricoEvents, Responder}};
+use crate::{backend::Backend, common::{respond_ok, respond_status, CONTENT_TYPE_JSON, CONTENT_TYPE_TEXT}, node::types::{Process, ProcessVersions}, types::{ElectricoEvents, Responder}};
 use super::{apis, addons, types::{ConsoleLogLevel, NodeCommand}};
 
 pub struct AppEnv {
@@ -79,22 +79,29 @@ pub fn process_node_command(tokio_runtime:&Runtime, app_env:&AppEnv,
             }
         },
         NodeCommand::ExecuteSync { script } => {
-            let (sender, receiver): (Sender<(bool, Vec<u8>)>, Receiver<(bool, Vec<u8>)>) = mpsc::channel();
-            tokio_runtime.spawn(
-                async move {
-                    loop {
-                        if let Ok(response) = receiver.try_recv() {
-                            if response.0 {
-                                respond_status(StatusCode::OK, CONTENT_TYPE_BIN.to_string(), response.1, responder);
-                            } else {
-                                respond_status(StatusCode::BAD_REQUEST, CONTENT_TYPE_BIN.to_string(), response.1, responder);
-                            }
-                            return;
-                        }
-                    }
+            let id = backend.execute_sync(proxy, script);
+            respond_status(StatusCode::OK, CONTENT_TYPE_TEXT.to_string(), id.as_bytes().to_vec(), responder);
+        },
+        NodeCommand::WaitExecuteSync { id, duration } => {
+            let resp:Option<&mut(Option<String>, Option<String>)> = backend.addon_state_get_mut(&id);
+            if let Some(resp) = resp {
+                if let Some(r) = &resp.0 {
+                    respond_status(StatusCode::OK, CONTENT_TYPE_TEXT.to_string(), r.as_bytes().to_vec(), responder);
+                } else if let Some(e) = &resp.1 {
+                    respond_status(StatusCode::BAD_REQUEST, CONTENT_TYPE_TEXT.to_string(), e.as_bytes().to_vec(), responder);
+                } else {
+                    respond_status(StatusCode::BAD_REQUEST, CONTENT_TYPE_TEXT.to_string(), "no data".as_bytes().to_vec(), responder);
                 }
-            );
-            backend.execute_sync(proxy, script, sender);
+            } else {
+                tokio_runtime.spawn(
+                    async move {
+                        thread::sleep(Duration::from_millis(duration));
+                        respond_status(StatusCode::NOT_FOUND, CONTENT_TYPE_TEXT.to_string(), "busy".as_bytes().to_vec(), responder);
+                    }
+                );
+                return;
+            }
+            backend.addon_state_remove(&id);
         },
         NodeCommand::ExecuteSyncResponse { uuid, data, error } => {
             respond_ok(responder);

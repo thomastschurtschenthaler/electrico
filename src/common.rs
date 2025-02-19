@@ -1,11 +1,9 @@
 use std::{collections::HashMap, fs::{self, File}, path::{Path, PathBuf}, thread::{self}};
 
-use hyper::{header::{ACCESS_CONTROL_ALLOW_ORIGIN, CONTENT_TYPE}, Response};
 use include_dir::{include_dir, Dir};
-use queues::{IsQueue, Queue};
 use reqwest::StatusCode;
 use urlencoding::decode;
-use log::{debug, info, trace, error};
+use log::{info, trace, error};
 use std::io::Read;
 
 use crate::{ipcchannel::IPCResponse, types::Responder};
@@ -174,13 +172,6 @@ fn respond_http(sender: tokio::sync::mpsc::Sender<IPCResponse>, body:Vec<u8>, co
 pub fn respond_ok(responder:Responder) {
     let body = Vec::from("OK".to_string().as_bytes());
     match responder {
-        Responder::CustomProtocol { responder } => {
-            responder.respond(Response::builder()
-                .status(StatusCode::OK)
-                .header(ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-                .header(CONTENT_TYPE, CONTENT_TYPE_HTML)
-                .body(body).unwrap());
-        },
         Responder::HttpProtocol { sender } => {
             respond_http(sender, body, CONTENT_TYPE_HTML.to_string(), StatusCode::OK);
         },
@@ -191,13 +182,6 @@ pub fn respond_ok(responder:Responder) {
 pub fn respond_404(responder:Responder) {
     let body = Vec::from("404".to_string().as_bytes());
     match responder {
-        Responder::CustomProtocol { responder } => {
-            responder.respond(Response::builder()
-                .status(StatusCode::NOT_FOUND)
-                .header(ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-                .header(CONTENT_TYPE, CONTENT_TYPE_HTML)
-                .body(body).unwrap());
-        },
         Responder::HttpProtocol { sender } => {
             respond_http(sender, body, CONTENT_TYPE_HTML.to_string(), StatusCode::NOT_FOUND);
         },
@@ -207,14 +191,7 @@ pub fn respond_404(responder:Responder) {
 
 pub fn respond_status(status:StatusCode, content_type: String, body:Vec<u8>, responder:Responder) {
     match responder {
-        Responder::CustomProtocol { responder } => {
-            responder.respond(Response::builder()
-                .status(status)
-                .header(ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-                .header(CONTENT_TYPE, content_type)
-                .body(body).unwrap());
-        },
-        Responder::HttpProtocol { sender } => {
+       Responder::HttpProtocol { sender } => {
             respond_http(sender, body, content_type, status);
         },
         _=>()
@@ -223,13 +200,6 @@ pub fn respond_status(status:StatusCode, content_type: String, body:Vec<u8>, res
 
 pub fn respond_client_error(error:String, responder:Responder) {
     match responder {
-        Responder::CustomProtocol { responder } => {
-            responder.respond(Response::builder()
-                .status(StatusCode::BAD_REQUEST)
-                .header(ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-                .header(CONTENT_TYPE, CONTENT_TYPE_TEXT)
-                .body(Vec::from(error.as_bytes())).unwrap());
-        },
         Responder::HttpProtocol { sender } => {
             respond_http(sender, Vec::from(error.as_bytes()), CONTENT_TYPE_TEXT.to_string(), StatusCode::BAD_REQUEST);
         },
@@ -250,46 +220,4 @@ pub fn is_module_request(host:Option<&str>) -> bool {
         }
     }
     false
-}
-pub struct DataQueue {
-    data_blobs:HashMap<String, Queue<Vec<u8>>>,
-}
-impl DataQueue {
-    pub fn new() -> DataQueue {
-        DataQueue {
-            data_blobs:HashMap::new(),
-        }
-    }
-    pub fn add(&mut self, k:&String, data:Vec<u8>) -> bool {
-        if let Some(q) = self.data_blobs.get_mut(k) {
-           let _ = q.add(data);
-        } else {
-            let mut q = Queue::new();
-            let _ = q.add(data);
-            self.data_blobs.insert(k.clone(), q);
-        }
-        return false;
-    }
-    pub fn take(&mut self, k:&String) -> Option<Vec<u8>>{
-        if let Some(q) = self.data_blobs.get_mut(k) {
-            let ret:Option<Vec<u8>>;
-            if let Ok(data) = q.peek() {
-                let _ = q.remove();
-                ret = Some(data);
-            } else {
-                ret = None;
-            }
-            if q.size()==0 {
-                self.data_blobs.remove(k);
-            }
-            return ret;
-        }
-        None
-    }
-    pub fn size(&mut self, k:&String) -> usize {
-        if let Some(q) = self.data_blobs.get_mut(k) {
-           return q.size();
-        }
-        return 0;
-    }
 }

@@ -13,7 +13,7 @@ use std::{collections::HashMap, convert::Infallible, net::SocketAddr, pin::Pin, 
 use log::{debug, error};
 use futures_util::TryStreamExt;
 
-use crate::{backend::Backend, common::{respond_client_error, respond_ok, respond_status, CONTENT_TYPE_BIN, CONTENT_TYPE_TEXT}, node::{common::send_command, node::AppEnv}, types::{BackendCommand, ElectricoEvents, NETConnection, NETServer, Responder}};
+use crate::{backend::Backend, common::{respond_client_error, respond_status, CONTENT_TYPE_BIN, CONTENT_TYPE_TEXT}, node::{common::send_command, node::AppEnv}, types::{BackendCommand, ElectricoEvents, NETConnection, NETServer, Responder}};
 
 use super::types::HTTPCommand;
 
@@ -62,7 +62,7 @@ pub fn process_http_command(tokio_runtime:&Runtime, _app_env:&AppEnv,
                         }
                         debug!("listening:{}", addr);
                         let id = addr.port().to_string();
-                        let (sender, mut receiver): (Sender<NETServer>, Receiver<NETServer>) = mpsc::channel(100);
+                        let (sender, _): (Sender<NETServer>, Receiver<NETServer>) = mpsc::channel(100);
                         let _ = send_command(&proxy, &command_sender, BackendCommand::NETServerStart { id: id.clone(), sender:sender });                
                         respond_status(StatusCode::OK, CONTENT_TYPE_TEXT.to_string(), id.into_bytes(), responder);
                     
