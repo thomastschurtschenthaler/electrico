@@ -26,8 +26,8 @@
           }
           return window.location.protocol+"//"+path;
       }
-      window.__create_protocol_url = (url, sync_cmd) => {
-        if ((sync_cmd == null || !sync_cmd) && window.__http_protocol!=null) {
+      window.__create_protocol_url = (url) => {
+        if (window.__http_protocol!=null) {
           let ix = url.indexOf(":");
           url = "http://electrico.localhost:"+window.__http_protocol.http_port+"/"+window.__http_protocol.http_uid+"@"+url.substring(0, ix)+"/"+url.substring(ix+3);
         } else if (window.__is_windows) {

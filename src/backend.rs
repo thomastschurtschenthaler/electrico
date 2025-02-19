@@ -247,19 +247,12 @@ fn create_web_view (
     #[cfg(target_os = "windows")] {
         is_windows = "true";
     }
-
-    let sync_cmd_handler = move |_:WebViewId, request: Request<Vec<u8>>, responder:RequestAsyncResponder| {
-        let path = request.uri().path().to_string();
-        trace!("sync_cmd_handler cmd request {} {}", path, request.body().len());
-        handle_electrico_cmd(proxy.clone(), path, request.uri().query(), request.body().to_vec(), crate::types::Responder::CustomProtocol { responder });
-    };
     
     let main = package.main.clone();
     let pid = std::process::id();
     debug!("webview:{http_uid},{http_port}");
     let builder = WebViewBuilder::new()
         .with_url(format!("http://{hash}.localhost:{http_port}/{http_uid}@electrico-file/file/{main}-{pid}"))
-        .with_asynchronous_custom_protocol(format!("cmd"), sync_cmd_handler)
         .with_devtools(true)
         .with_incognito(false)
         .with_initialization_script(format!(

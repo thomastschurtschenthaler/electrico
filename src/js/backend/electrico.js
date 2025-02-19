@@ -94,12 +94,18 @@ var __electrico_nonce=null;
                         body=cmdjson;
                     }
                     const req = new XMLHttpRequest();
-                    req.open("POST", window.__create_protocol_url("cmd://cmd/"+action+"."+call+(urlcmd!=null?("?"+encodeURIComponent(urlcmd)):""), (!async && bin)), async);
+                    let url = window.__create_protocol_url("cmd://cmd/"+action+"."+call+(urlcmd!=null?("?"+encodeURIComponent(urlcmd)):""));
+                    req.open("POST", url, async);
+                    
                     if (async) {
                         req.timeout=600000;
                     }
                     if (bin) {
-                        req.responseType = "arraybuffer";
+                        if (url.startsWith("http://")) {
+                            req.overrideMimeType("text/plain; charset=x-user-defined");
+                        } else {
+                            req.responseType = "arraybuffer";
+                        }
                     }
                     req.send(body);
                     if (async) {
@@ -118,6 +124,9 @@ var __electrico_nonce=null;
                         }
                     } else {
                         if (req.status==200) {
+                            if (bin && url.startsWith("http://")) {
+                                return {r:Uint8Array.from(req.response, c=>c.charCodeAt(0))};
+                            }
                             return {r:req.response};
                         } else {
                             return {e:req.response};
